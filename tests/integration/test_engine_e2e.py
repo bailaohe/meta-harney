@@ -1,6 +1,7 @@
 """End-to-end engine tests using FakeLLMProvider."""
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import ClassVar
 
@@ -289,3 +290,51 @@ async def test_hook_halt_terminates_turn() -> None:
             config=RuntimeConfig(model="x"),
         ):
             pass
+
+
+class _SlowTool(BaseTool):
+    name: ClassVar[str] = "slow"
+    description: ClassVar[str] = "Sleeps too long."
+    input_schema: ClassVar[type[BaseModel]] = _EchoInput
+    default_timeout: ClassVar[float | None] = 0.05  # 50ms
+
+    async def execute(self, inv: ToolInvocation, ctx: ToolContext) -> ToolResult:
+        await asyncio.sleep(1.0)
+        return ToolResult(success=True, output="never")
+
+
+async def test_tool_timeout_e2e() -> None:
+    """Slow tool times out, LLM sees error, gives final answer."""
+    store = MemorySessionStore()
+    await _new_session(store)
+
+    provider = FakeLLMProvider(rounds=[
+        FakeRound(
+            tool_calls=[ProviderToolCall(invocation_id="i1", name="slow", args={})],
+            stop_reason="tool_use",
+        ),
+        FakeRound(text="Tool timed out.", stop_reason="end_turn"),
+    ])
+
+    events: list[StreamEvent] = []
+    async for ev in run_turn(
+        session_id="s1",
+        user_message=Message(role="user", content=[TextBlock(text="run slow")]),
+        provider=provider,
+        prompt_builder=MinimalPromptBuilder(session_store=store),
+        permission_resolver=AllowAllPermissionResolver(),
+        tools={"slow": _SlowTool()},
+        hooks=[],
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="x"),
+    ):
+        events.append(ev)
+
+    completed = [e for e in events if isinstance(e, ToolCallCompleted)]
+    assert len(completed) == 1
+    assert not completed[0].result.success
+    assert "timed out" in (completed[0].result.error or "").lower()
+
+    text_events = [e for e in events if isinstance(e, TextDelta)]
+    assert any("timed out" in e.text.lower() for e in text_events)
