@@ -12,6 +12,7 @@ from meta_harney.abstractions._types import Message, TextBlock
 from meta_harney.abstractions.hook import BaseHook, HookDecision, HookEvent, HookEventKind
 from meta_harney.abstractions.session import Session
 from meta_harney.abstractions.tool import BaseTool, ToolContext, ToolInvocation, ToolResult
+from meta_harney.builtin.compaction.summarization import SummarizationCompactor
 from meta_harney.builtin.permission.allow_all import AllowAllPermissionResolver
 from meta_harney.builtin.permission.deny_all import DenyAllPermissionResolver
 from meta_harney.builtin.prompt.minimal import MinimalPromptBuilder
@@ -338,3 +339,76 @@ async def test_tool_timeout_e2e() -> None:
 
     text_events = [e for e in events if isinstance(e, TextDelta)]
     assert any("timed out" in e.text.lower() for e in text_events)
+
+
+async def _fake_summarize(messages: list[Message]) -> str:
+    return f"summary-of-{len(messages)}"
+
+
+async def test_compaction_triggered_e2e() -> None:
+    """After a tool round, engine triggers compaction; session.messages shrinks."""
+    store = MemorySessionStore()
+    await _new_session(store)
+    # Pre-populate session with many messages to make compaction trigger
+    pre_session = await store.load("s1")
+    assert pre_session is not None
+    for i in range(25):
+        pre_session.messages.append(
+            Message(role="user", content=[TextBlock(text=f"old-{i}")])
+        )
+        pre_session.messages.append(
+            Message(role="assistant", content=[TextBlock(text=f"reply-{i}")])
+        )
+    await store.save(pre_session)
+
+    provider = FakeLLMProvider(rounds=[
+        FakeRound(
+            tool_calls=[ProviderToolCall(invocation_id="i1", name="echo", args={"text": "x"})],
+            stop_reason="tool_use",
+        ),
+        FakeRound(text="done", stop_reason="end_turn"),
+    ])
+
+    # Mock token counter: each message contributes 1000 tokens
+    def counter(msgs: list[Message]) -> int:
+        return len(msgs) * 1000
+
+    compactor = SummarizationCompactor(
+        session_store=store,
+        summarize_fn=_fake_summarize,
+        keep_recent=5,
+    )
+
+    async for _ev in run_turn(
+        session_id="s1",
+        user_message=Message(role="user", content=[TextBlock(text="now")]),
+        provider=provider,
+        prompt_builder=MinimalPromptBuilder(session_store=store),
+        permission_resolver=AllowAllPermissionResolver(),
+        tools={"echo": _EchoTool()},
+        hooks=[],
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(
+            model="x",
+            context_window_tokens=10_000,
+            compaction_trigger_tokens=5000,
+        ),
+        compaction=compactor,
+        token_counter=counter,
+    ):
+        pass
+
+    loaded = await store.load("s1")
+    assert loaded is not None
+    # After compaction: many fewer messages
+    assert len(loaded.messages) < 20
+    # A summary message exists
+    has_summary = any(
+        m.role == "system"
+        and m.content
+        and isinstance(m.content[0], TextBlock)
+        and "summary-of" in m.content[0].text
+        for m in loaded.messages
+    )
+    assert has_summary

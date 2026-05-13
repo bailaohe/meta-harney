@@ -1,7 +1,7 @@
 """Engine main loop: run_turn() orchestrator."""
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 
 from meta_harney.abstractions._types import (
     ContentBlock,
@@ -10,6 +10,7 @@ from meta_harney.abstractions._types import (
     ToolCallBlock,
     ToolResultBlock,
 )
+from meta_harney.abstractions.compaction import CompactionStrategy
 from meta_harney.abstractions.hook import BaseHook, HookEvent
 from meta_harney.abstractions.permission import PermissionResolver
 from meta_harney.abstractions.prompt import PromptBuilder
@@ -37,6 +38,20 @@ from meta_harney.providers.base import (
     ProviderToolCall,
 )
 
+TokenCounter = Callable[[list[Message]], int]
+
+
+def _default_token_counter(messages: list[Message]) -> int:
+    """Heuristic: 1 token per 4 characters of text content."""
+    total = 0
+    for m in messages:
+        for block in m.content:
+            if isinstance(block, TextBlock):
+                total += max(1, len(block.text) // 4)
+            else:
+                total += 10  # rough fixed cost for non-text blocks
+    return total
+
 
 async def run_turn(
     *,
@@ -50,8 +65,11 @@ async def run_turn(
     session_store: SessionStore,
     trace_sink: TraceSink,
     config: RuntimeConfig,
+    compaction: CompactionStrategy | None = None,
+    token_counter: TokenCounter | None = None,
 ) -> AsyncGenerator[StreamEvent, None]:
     turn_span = new_span_id()
+    counter = token_counter or _default_token_counter
 
     session = await session_store.load(session_id)
     if session is None:
@@ -237,6 +255,59 @@ async def run_turn(
         session.messages.append(Message(role="tool", content=tool_result_blocks))
         yield IterationCompleted(iteration=iteration)
         iteration += 1
+
+        # Compaction check after each tool iteration
+        if (
+            compaction is not None
+            and config.compaction_trigger_tokens is not None
+        ):
+            current_tokens = counter(session.messages)
+            if current_tokens > config.compaction_trigger_tokens:
+                should = await compaction.should_compact(
+                    session_id, current_tokens, config.context_window_tokens
+                )
+                if should:
+                    before_n = len(session.messages)
+                    before_tokens = current_tokens
+                    # Persist current state so compactor can re-load it
+                    await session_store.save(session)
+                    # Re-load to refresh version after save
+                    fresh = await session_store.load(session_id)
+                    assert fresh is not None
+                    session = fresh
+                    try:
+                        new_messages = await compaction.compact(session_id)
+                    except Exception as exc:
+                        await emit_event(
+                            trace_sink,
+                            session_id=session_id,
+                            kind="error.raised",
+                            span_id=new_span_id(),
+                            parent_span_id=turn_span,
+                            payload={
+                                "source": "compaction",
+                                "exc_type": type(exc).__name__,
+                                "message": str(exc),
+                            },
+                        )
+                        # Per spec §7.2: CompactionError fail-open, continue loop
+                        continue
+                    session.messages = new_messages
+                    after_n = len(session.messages)
+                    after_tokens = counter(session.messages)
+                    await emit_event(
+                        trace_sink,
+                        session_id=session_id,
+                        kind="compaction.triggered",
+                        span_id=new_span_id(),
+                        parent_span_id=turn_span,
+                        payload={
+                            "before_msgs": before_n,
+                            "after_msgs": after_n,
+                            "before_tokens": before_tokens,
+                            "after_tokens": after_tokens,
+                        },
+                    )
 
     # Fire turn_complete hook
     await dispatch_hooks(
