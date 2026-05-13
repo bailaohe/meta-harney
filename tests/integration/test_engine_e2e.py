@@ -4,9 +4,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import ClassVar
 
+import pytest
 from pydantic import BaseModel
 
 from meta_harney.abstractions._types import Message, TextBlock
+from meta_harney.abstractions.hook import BaseHook, HookDecision, HookEvent, HookEventKind
 from meta_harney.abstractions.session import Session
 from meta_harney.abstractions.tool import BaseTool, ToolContext, ToolInvocation, ToolResult
 from meta_harney.builtin.permission.allow_all import AllowAllPermissionResolver
@@ -23,6 +25,7 @@ from meta_harney.engine.stream_events import (
     ToolCallStarted,
     TurnCompleted,
 )
+from meta_harney.errors import HookHaltError
 from meta_harney.providers.fake import FakeLLMProvider, FakeRound, ProviderToolCall
 
 
@@ -194,3 +197,95 @@ async def test_permission_denied_e2e() -> None:
     last_assistant_text = assistant_msgs[-1].content[0]
     assert isinstance(last_assistant_text, TextBlock)
     assert "not allowed" in last_assistant_text.text
+
+
+class _RecordingHook(BaseHook):
+    """Records every event it sees, in order."""
+
+    def __init__(self, kinds: set[HookEventKind]) -> None:
+        # Override ClassVar per-instance for test recording purposes.
+        self.subscribed_events = kinds  # type: ignore[assignment]
+        self.received: list[HookEvent] = []
+
+    async def handle(self, event: HookEvent) -> HookDecision:
+        self.received.append(event)
+        return HookDecision(allow=True)
+
+
+async def test_hook_firing_all_kinds() -> None:
+    """Verify engine fires all 7 hook events during a turn with a tool call."""
+    store = MemorySessionStore()
+    await _new_session(store)
+
+    provider = FakeLLMProvider(rounds=[
+        FakeRound(
+            tool_calls=[ProviderToolCall(
+                invocation_id="i1", name="echo", args={"text": "hi"},
+            )],
+            stop_reason="tool_use",
+        ),
+        FakeRound(text="done", stop_reason="end_turn"),
+    ])
+
+    recorder = _RecordingHook({
+        "session_start", "session_end",
+        "pre_llm", "post_llm",
+        "pre_tool", "post_tool",
+        "turn_complete",
+    })
+
+    async for _ev in run_turn(
+        session_id="s1",
+        user_message=Message(role="user", content=[TextBlock(text="hi")]),
+        provider=provider,
+        prompt_builder=MinimalPromptBuilder(session_store=store),
+        permission_resolver=AllowAllPermissionResolver(),
+        tools={"echo": _EchoTool()},
+        hooks=[recorder],
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="x"),
+    ):
+        pass
+
+    kinds_seen = [e.kind for e in recorder.received]
+    # session_start fires once at turn entry
+    assert "session_start" in kinds_seen
+    # pre_llm fires per iteration (2 here)
+    assert kinds_seen.count("pre_llm") == 2
+    assert kinds_seen.count("post_llm") == 2
+    # pre_tool/post_tool fire once each (1 tool call)
+    assert kinds_seen.count("pre_tool") == 1
+    assert kinds_seen.count("post_tool") == 1
+    # turn_complete + session_end fire once at exit
+    assert "turn_complete" in kinds_seen
+    assert "session_end" in kinds_seen
+
+
+async def test_hook_halt_terminates_turn() -> None:
+    """Hook raising HookHaltError stops the engine and propagates."""
+    store = MemorySessionStore()
+    await _new_session(store)
+
+    class _HaltOnPreLlm(BaseHook):
+        subscribed_events: ClassVar[set[HookEventKind]] = {"pre_llm"}
+
+        async def handle(self, event: HookEvent) -> HookDecision:
+            raise HookHaltError(reason="manual stop")
+
+    provider = FakeLLMProvider(rounds=[FakeRound(text="never", stop_reason="end_turn")])
+
+    with pytest.raises(HookHaltError, match="manual stop"):
+        async for _ev in run_turn(
+            session_id="s1",
+            user_message=Message(role="user", content=[TextBlock(text="hi")]),
+            provider=provider,
+            prompt_builder=MinimalPromptBuilder(session_store=store),
+            permission_resolver=AllowAllPermissionResolver(),
+            tools={},
+            hooks=[_HaltOnPreLlm()],
+            session_store=store,
+            trace_sink=NullSink(),
+            config=RuntimeConfig(model="x"),
+        ):
+            pass

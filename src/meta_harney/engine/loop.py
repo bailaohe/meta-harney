@@ -10,13 +10,14 @@ from meta_harney.abstractions._types import (
     ToolCallBlock,
     ToolResultBlock,
 )
-from meta_harney.abstractions.hook import BaseHook
+from meta_harney.abstractions.hook import BaseHook, HookEvent
 from meta_harney.abstractions.permission import PermissionResolver
 from meta_harney.abstractions.prompt import PromptBuilder
 from meta_harney.abstractions.session import SessionStore
 from meta_harney.abstractions.tool import BaseTool, ToolContext, ToolInvocation, ToolResult
 from meta_harney.abstractions.trace import TraceSink
 from meta_harney.engine.config import RuntimeConfig, tool_to_spec
+from meta_harney.engine.hook_dispatch import dispatch_hooks
 from meta_harney.engine.stream_events import (
     IterationCompleted,
     StreamEvent,
@@ -67,12 +68,23 @@ async def run_turn(
         payload={"user_message_role": user_message.role},
     )
 
+    # Fire session_start hook
+    await dispatch_hooks(
+        hooks,
+        HookEvent(
+            kind="session_start",
+            session_id=session_id,
+            payload={"user_message_role": user_message.role},
+        ),
+        trace_sink,
+        turn_span,
+    )
+
     tool_specs = [tool_to_spec(t) for t in tools.values()]
     iteration = 0
     stop = False
 
     while not stop and iteration < config.max_iterations:
-        # Build prompt
         system_prompt = await prompt_builder.build_system_prompt(session_id)
         await emit_event(
             trace_sink,
@@ -83,7 +95,18 @@ async def run_turn(
             payload={"n_messages": len(session.messages), "iteration": iteration},
         )
 
-        # Call LLM
+        # Fire pre_llm hook
+        await dispatch_hooks(
+            hooks,
+            HookEvent(
+                kind="pre_llm",
+                session_id=session_id,
+                payload={"iteration": iteration, "n_messages": len(session.messages)},
+            ),
+            trace_sink,
+            turn_span,
+        )
+
         llm_span = new_span_id()
         await emit_event(
             trace_sink,
@@ -96,6 +119,7 @@ async def run_turn(
 
         text_chunks: list[str] = []
         tool_calls: list[ProviderToolCall] = []
+        stop_reason = "end_turn"
 
         async for ev in provider.stream(
             messages=list(session.messages),
@@ -109,6 +133,7 @@ async def run_turn(
             elif isinstance(ev, ProviderToolCall):
                 tool_calls.append(ev)
             elif isinstance(ev, ProviderStreamDone):
+                stop_reason = ev.stop_reason
                 await emit_event(
                     trace_sink,
                     session_id=session_id,
@@ -123,7 +148,6 @@ async def run_turn(
                 )
                 break
 
-        # Assemble assistant message
         assistant_blocks: list[ContentBlock] = []
         if text_chunks:
             assistant_blocks.append(TextBlock(text="".join(text_chunks)))
@@ -135,6 +159,22 @@ async def run_turn(
             ))
         session.messages.append(Message(role="assistant", content=assistant_blocks))
 
+        # Fire post_llm hook
+        await dispatch_hooks(
+            hooks,
+            HookEvent(
+                kind="post_llm",
+                session_id=session_id,
+                payload={
+                    "iteration": iteration,
+                    "stop_reason": stop_reason,
+                    "n_tool_calls": len(tool_calls),
+                },
+            ),
+            trace_sink,
+            turn_span,
+        )
+
         # No tool calls? we're done
         if not tool_calls:
             stop = True
@@ -142,7 +182,7 @@ async def run_turn(
             iteration += 1
             break
 
-        # Dispatch each tool call
+        # Dispatch each tool call (pre_tool / post_tool fire inside execute_tool)
         tool_result_blocks: list[ContentBlock] = []
         for tc in tool_calls:
             yield ToolCallStarted(
@@ -197,6 +237,30 @@ async def run_turn(
         session.messages.append(Message(role="tool", content=tool_result_blocks))
         yield IterationCompleted(iteration=iteration)
         iteration += 1
+
+    # Fire turn_complete hook
+    await dispatch_hooks(
+        hooks,
+        HookEvent(
+            kind="turn_complete",
+            session_id=session_id,
+            payload={"total_iterations": iteration},
+        ),
+        trace_sink,
+        turn_span,
+    )
+
+    # Fire session_end hook
+    await dispatch_hooks(
+        hooks,
+        HookEvent(
+            kind="session_end",
+            session_id=session_id,
+            payload={"total_iterations": iteration},
+        ),
+        trace_sink,
+        turn_span,
+    )
 
     await session_store.save(session)
 
