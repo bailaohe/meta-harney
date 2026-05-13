@@ -93,3 +93,14 @@ async def test_records_calls() -> None:
     assert len(provider.calls) == 1
     assert provider.calls[0].system_prompt == "be helpful"
     assert provider.calls[0].messages == msgs
+
+
+from meta_harney.providers.base import LLMProvider as _LLMProvider
+from tests.contracts.llm_provider import LLMProviderContract
+
+
+class TestFakeLLMProviderContract(LLMProviderContract):
+    def make_provider(self) -> _LLMProvider:
+        return FakeLLMProvider(
+            rounds=[FakeRound(text="ok", stop_reason="end_turn")]
+        )
