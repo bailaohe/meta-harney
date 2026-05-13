@@ -10,6 +10,7 @@ from meta_harney.abstractions._types import Message, TextBlock
 from meta_harney.abstractions.session import Session
 from meta_harney.abstractions.tool import BaseTool, ToolContext, ToolInvocation, ToolResult
 from meta_harney.builtin.permission.allow_all import AllowAllPermissionResolver
+from meta_harney.builtin.permission.deny_all import DenyAllPermissionResolver
 from meta_harney.builtin.prompt.minimal import MinimalPromptBuilder
 from meta_harney.builtin.session.memory_store import MemorySessionStore
 from meta_harney.builtin.trace.null_sink import NullSink
@@ -140,3 +141,56 @@ async def test_tool_call_cycle() -> None:
 
     # Provider was called twice (initial + post-tool)
     assert len(provider.calls) == 2
+
+
+async def test_permission_denied_e2e() -> None:
+    """LLM requests a tool, permission resolver denies, LLM sees the denial."""
+    store = MemorySessionStore()
+    await _new_session(store)
+
+    provider = FakeLLMProvider(rounds=[
+        FakeRound(
+            tool_calls=[ProviderToolCall(
+                invocation_id="inv-1",
+                name="echo",
+                args={"text": "blocked"},
+            )],
+            stop_reason="tool_use",
+        ),
+        FakeRound(text="Sorry, I'm not allowed.", stop_reason="end_turn"),
+    ])
+
+    builder = MinimalPromptBuilder(session_store=store)
+
+    events: list[StreamEvent] = []
+    async for ev in run_turn(
+        session_id="s1",
+        user_message=Message(role="user", content=[TextBlock(text="echo something")]),
+        provider=provider,
+        prompt_builder=builder,
+        permission_resolver=DenyAllPermissionResolver(),
+        tools={"echo": _EchoTool()},
+        hooks=[],
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="fake-model"),
+    ):
+        events.append(ev)
+
+    # ToolCallCompleted indicates failure
+    completed = [e for e in events if isinstance(e, ToolCallCompleted)]
+    assert len(completed) == 1
+    assert not completed[0].result.success
+    assert "deny" in (completed[0].result.error or "").lower()
+
+    # LLM was asked twice (initial + recovery)
+    assert len(provider.calls) == 2
+
+    # Session shows the deny propagated as tool result
+    loaded = await store.load("s1")
+    assert loaded is not None
+    assistant_msgs = [m for m in loaded.messages if m.role == "assistant"]
+    assert len(assistant_msgs) >= 1
+    last_assistant_text = assistant_msgs[-1].content[0]
+    assert isinstance(last_assistant_text, TextBlock)
+    assert "not allowed" in last_assistant_text.text
