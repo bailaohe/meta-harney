@@ -27,7 +27,6 @@ Phase 6 是 v0.0.5 的稳定化收尾：补齐设计文档 §8.4 列出但尚未
 - thinking 配合 tool_use 多轮的完整支持（需要把 thinking block 作为 ContentBlock 入 session.messages，本阶段不做）
 - OpenAI 的 thinking 概念（OpenAI Chat Completions 没有这个概念）
 - CI 矩阵（推迟，按用户决策）
-- CRM mini-demo（独立 phase）
 
 ## 2. 总体架构
 
@@ -284,6 +283,5 @@ invoke(session_id, "Q2") → load → append user(Q2)
 ## 10. Phase 7+ 候选
 
 - ThinkingDelta 完整模式（thinking 入 ContentBlock，支持 thinking + tool_use 多轮，含 signature/redacted 处理）
-- CRM mini-demo（spec §9.3 #6）
 - CI 矩阵（spec §8.6）
 - `__init__.py` 导出整理（如果 Provider* 事件类型导出层级值得重组）

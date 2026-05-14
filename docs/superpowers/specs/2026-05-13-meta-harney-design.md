@@ -45,7 +45,8 @@ meta-harney/
 ├── docs/
 │   ├── architecture.md
 │   ├── abstractions.md
-│   └── examples/                           # 业务 agent 示例（含 CRM mini-demo）
+│   ├── providers.md
+│   └── testing.md
 │
 ├── src/meta_harney/
 │   ├── __init__.py                         # 公开 API
@@ -634,7 +635,6 @@ async def test_my_crm_tool():
 3. **引擎重构**：改造 `engine/loop.py` 解除硬编码
 4. **契约测试**：写各 Protocol 的 Contract 测试套
 5. **集成测试**：FakeLLMProvider + 10 个 e2e 场景
-6. **示例**：CRM mini-demo 验证完整通路
 
 ## 10. 关键 Open Questions
 
