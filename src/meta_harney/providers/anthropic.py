@@ -20,7 +20,9 @@ from meta_harney.abstractions._serialize import _serialize_tool_output
 from meta_harney.abstractions._types import (
     ImageBlock,
     Message,
+    RedactedThinkingBlock,
     TextBlock,
+    ThinkingBlock,
     ToolCallBlock,
     ToolResultBlock,
 )
@@ -96,6 +98,14 @@ def _convert_messages_to_anthropic(
             if not block.success:
                 result_block["is_error"] = True
             return result_block
+        if isinstance(block, ThinkingBlock):
+            return {
+                "type": "thinking",
+                "thinking": block.text,
+                "signature": block.signature,
+            }
+        if isinstance(block, RedactedThinkingBlock):
+            return {"type": "redacted_thinking", "data": block.data}
         raise ValueError(f"unknown content block type: {type(block).__name__}")
 
     for msg in messages:

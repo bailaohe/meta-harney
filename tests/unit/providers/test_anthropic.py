@@ -897,3 +897,38 @@ async def test_anthropic_redacted_thinking_emits_provider_event() -> None:
     redacted = [e for e in collected if isinstance(e, ProviderRedactedThinking)]
     assert len(redacted) == 1
     assert redacted[0].data == "opaque-blob-xyz"
+
+
+def test_convert_thinking_block_to_anthropic_wire_format() -> None:
+    """ThinkingBlock in assistant content → {type:thinking, thinking, signature}."""
+    from meta_harney.abstractions._types import Message, ThinkingBlock
+    from meta_harney.providers.anthropic import _convert_messages_to_anthropic
+
+    msgs = [
+        Message(
+            role="assistant",
+            content=[ThinkingBlock(text="reasoning", signature="sig1")],
+        ),
+    ]
+    converted, _ = _convert_messages_to_anthropic(msgs)
+    content = converted[0]["content"]
+    assert content[0] == {
+        "type": "thinking",
+        "thinking": "reasoning",
+        "signature": "sig1",
+    }
+
+
+def test_convert_redacted_thinking_block_to_anthropic_wire_format() -> None:
+    from meta_harney.abstractions._types import Message, RedactedThinkingBlock
+    from meta_harney.providers.anthropic import _convert_messages_to_anthropic
+
+    msgs = [
+        Message(
+            role="assistant",
+            content=[RedactedThinkingBlock(data="opaque-xyz")],
+        ),
+    ]
+    converted, _ = _convert_messages_to_anthropic(msgs)
+    content = converted[0]["content"]
+    assert content[0] == {"type": "redacted_thinking", "data": "opaque-xyz"}
