@@ -1,12 +1,15 @@
 """meta_harney — domain-agnostic agent runtime SDK.
 
-Phase 7 status: extended-thinking full mode + GitHub Actions CI.
-- ThinkingBlock + RedactedThinkingBlock content blocks (persisted, round-tripped)
-- ProviderThinkingBlock + ProviderRedactedThinking stream events
-- AnthropicProvider buffers thinking_delta + signature_delta, emits at content_block_stop
-- Engine appends thinking blocks to assistant Message.content (entering session.messages)
-- OpenAIProvider silently skips thinking blocks (no concept)
-- GitHub repo + Actions CI matrix (Python 3.10/3.11/3.12 x ubuntu/macos)
+Phase 9a status: Provider Catalog.
+- ProviderSpec + BUILT_IN_PROVIDERS for 9 known providers
+  (anthropic, openai, moonshot, deepseek, gemini, minimax, nvidia,
+  dashscope, modelscope)
+- provider_from_spec() factory and register_provider() extension hook
+- Anthropic extended-thinking full mode (Phase 7)
+- ThinkingBlock + RedactedThinkingBlock content blocks
+- OpenAIProvider (Phase 5) + AnthropicProvider (Phase 4)
+- 9 core abstractions + builtin defaults
+- GitHub Actions CI matrix (3.10/3.11/3.12 x ubuntu/macos)
 """
 
 from meta_harney.abstractions import (
@@ -81,7 +84,7 @@ from meta_harney.testing import (
     runtime_for_testing,
 )
 
-__version__ = "0.0.7"
+__version__ = "0.0.8"
 
 __all__ = [
     # provider catalog
