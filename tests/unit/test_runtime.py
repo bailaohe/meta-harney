@@ -1,13 +1,20 @@
 """Tests for AgentRuntime — top-level SDK entry point."""
 from __future__ import annotations
 
+from typing import ClassVar
+
+from pydantic import BaseModel as _PBM
+
 from meta_harney.abstractions._types import Message, TextBlock
+from meta_harney.abstractions.tool import BaseTool, ToolContext, ToolInvocation, ToolResult
+from meta_harney.builtin.multi_agent.in_process import InProcessMultiAgentBackend
 from meta_harney.builtin.permission.allow_all import AllowAllPermissionResolver
 from meta_harney.builtin.prompt.minimal import MinimalPromptBuilder
 from meta_harney.builtin.session.memory_store import MemorySessionStore
 from meta_harney.builtin.trace.null_sink import NullSink
 from meta_harney.engine.config import RuntimeConfig
 from meta_harney.engine.stream_events import StreamEvent, TextDelta, TurnCompleted
+from meta_harney.providers.base import ProviderToolCall
 from meta_harney.providers.fake import FakeLLMProvider, FakeRound
 from meta_harney.runtime import AgentRuntime
 
@@ -163,3 +170,97 @@ async def test_invoke_returns_empty_assistant_on_no_text() -> None:
     assert result.role == "assistant"
     # No TextBlocks expected
     assert all(not isinstance(b, TextBlock) for b in result.content)
+
+
+class _MultiAgentInput(_PBM):
+    pass
+
+
+class _ProbeMultiAgentTool(BaseTool):
+    """Reads ctx.multi_agent and returns whether it was set."""
+    name: ClassVar[str] = "probe_multi_agent"
+    description: ClassVar[str] = "Reports whether ctx.multi_agent is set."
+    input_schema: ClassVar[type[_PBM]] = _MultiAgentInput
+
+    async def execute(self, inv: ToolInvocation, ctx: ToolContext) -> ToolResult:
+        return ToolResult(
+            success=True,
+            output={"multi_agent_present": ctx.multi_agent is not None},
+        )
+
+
+async def test_runtime_threads_multi_agent_into_tool_context() -> None:
+    """If AgentRuntime was constructed with multi_agent, tools see it via ctx."""
+    store = MemorySessionStore()
+    backend = InProcessMultiAgentBackend(
+        provider=FakeLLMProvider(rounds=[]),
+        permission_resolver=AllowAllPermissionResolver(),
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="fake"),
+        all_tools={},
+        hooks=[],
+    )
+
+    provider = FakeLLMProvider(rounds=[
+        FakeRound(
+            tool_calls=[ProviderToolCall(
+                invocation_id="i1", name="probe_multi_agent", args={},
+            )],
+            stop_reason="tool_use",
+        ),
+        FakeRound(text="done", stop_reason="end_turn"),
+    ])
+
+    rt = AgentRuntime(
+        provider=provider,
+        prompt_builder=MinimalPromptBuilder(session_store=store),
+        permission_resolver=AllowAllPermissionResolver(),
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="fake"),
+        tools={"probe_multi_agent": _ProbeMultiAgentTool()},
+        multi_agent=backend,
+    )
+
+    session = await rt.create_session()
+    saw_present = False
+    async for ev in rt.stream(session.id, "probe"):
+        if hasattr(ev, "result"):
+            # ToolCallCompleted
+            assert ev.result.success
+            assert ev.result.output == {"multi_agent_present": True}
+            saw_present = True
+    assert saw_present
+
+
+async def test_runtime_without_multi_agent_tool_sees_none() -> None:
+    """If AgentRuntime was NOT given multi_agent, ctx.multi_agent is None."""
+    store = MemorySessionStore()
+    provider = FakeLLMProvider(rounds=[
+        FakeRound(
+            tool_calls=[ProviderToolCall(
+                invocation_id="i1", name="probe_multi_agent", args={},
+            )],
+            stop_reason="tool_use",
+        ),
+        FakeRound(text="done", stop_reason="end_turn"),
+    ])
+
+    rt = AgentRuntime(
+        provider=provider,
+        prompt_builder=MinimalPromptBuilder(session_store=store),
+        permission_resolver=AllowAllPermissionResolver(),
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="fake"),
+        tools={"probe_multi_agent": _ProbeMultiAgentTool()},
+        # No multi_agent kwarg
+    )
+
+    session = await rt.create_session()
+    seen: list[object] = []
+    async for ev in rt.stream(session.id, "probe"):
+        if hasattr(ev, "result"):
+            seen.append(ev.result.output)
+    assert seen == [{"multi_agent_present": False}]

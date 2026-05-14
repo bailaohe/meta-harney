@@ -12,6 +12,7 @@ from meta_harney.abstractions._types import (
 )
 from meta_harney.abstractions.compaction import CompactionStrategy
 from meta_harney.abstractions.hook import BaseHook, HookEvent
+from meta_harney.abstractions.multi_agent import MultiAgentBackend
 from meta_harney.abstractions.permission import PermissionResolver
 from meta_harney.abstractions.prompt import PromptBuilder
 from meta_harney.abstractions.session import SessionStore
@@ -94,6 +95,7 @@ async def run_turn(
     config: RuntimeConfig,
     compaction: CompactionStrategy | None = None,
     token_counter: TokenCounter | None = None,
+    multi_agent: MultiAgentBackend | None = None,
 ) -> AsyncGenerator[StreamEvent, None]:
     turn_span = new_span_id()
     counter = token_counter or _default_token_counter
@@ -272,6 +274,7 @@ async def run_turn(
                         trace_sink=trace_sink,
                         current_span_id=turn_span,
                         new_span_id=new_span_id,
+                        multi_agent=multi_agent,
                     )
                     result = await execute_tool(
                         invocation=inv,

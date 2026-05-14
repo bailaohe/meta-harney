@@ -100,6 +100,7 @@ async def execute_tool(
         trace_sink=ctx.trace_sink,
         current_span_id=tool_span,
         new_span_id=ctx.new_span_id,
+        multi_agent=ctx.multi_agent,
     )
     await emit_event(
         sink,

@@ -127,6 +127,7 @@ class AgentRuntime:
             config=self._config,
             compaction=self._compaction,
             token_counter=self._token_counter,
+            multi_agent=self._multi_agent,
         ):
             yield ev
 
