@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, Literal
+
+from openai import AsyncOpenAI
 
 from meta_harney.abstractions._types import (
     ImageBlock,
@@ -23,7 +25,9 @@ from meta_harney.abstractions._types import (
 from meta_harney.errors import ConfigurationError
 from meta_harney.providers.base import (
     ProviderCallConfig,
+    ProviderStreamDone,
     ProviderStreamEvent,
+    ProviderTextDelta,
     ToolSpec,
 )
 
@@ -156,12 +160,75 @@ class OpenAIProvider:
         self._base_url = base_url
         self._default_max_tokens = default_max_tokens
 
-    def stream(
+    async def stream(
         self,
         messages: list[Message],
         system_prompt: str,
         tools: list[ToolSpec],
         config: ProviderCallConfig,
     ) -> AsyncGenerator[ProviderStreamEvent, None]:
-        """Stream a single LLM call. Filled in by Tasks 4-6."""
-        raise NotImplementedError("OpenAI stream lands in Task 4")
+        """Stream one OpenAI Chat Completions call.
+
+        Translates SDK chunks into ProviderStreamEvent variants.
+        """
+        client = AsyncOpenAI(api_key=self._api_key, base_url=self._base_url)
+
+        wire_messages = _convert_messages_to_openai(messages, system_prompt=system_prompt)
+        wire_tools = _convert_tools_to_openai(tools)
+        max_tokens = config.max_tokens or self._default_max_tokens
+
+        kwargs: dict[str, Any] = {
+            "model": config.model,
+            "messages": wire_messages,
+            "max_tokens": max_tokens,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if wire_tools:
+            kwargs["tools"] = wire_tools
+        if config.temperature is not None:
+            kwargs["temperature"] = config.temperature
+
+        finish_reason: str | None = None
+        input_tokens: int | None = None
+        output_tokens: int | None = None
+
+        stream_ = await client.chat.completions.create(**kwargs)
+
+        async for chunk in stream_:
+            # Usage chunk (with stream_options={"include_usage": True}) has empty choices.
+            if getattr(chunk, "usage", None) is not None:
+                input_tokens = getattr(chunk.usage, "prompt_tokens", None)
+                output_tokens = getattr(chunk.usage, "completion_tokens", None)
+
+            if not chunk.choices:
+                continue
+
+            choice = chunk.choices[0]
+            delta = choice.delta
+
+            text_delta = getattr(delta, "content", None)
+            if text_delta:
+                yield ProviderTextDelta(text=text_delta)
+
+            # Tool call deltas handled in Task 5
+
+            if choice.finish_reason is not None:
+                finish_reason = choice.finish_reason
+
+        # Map OpenAI finish_reason → meta_harney stop_reason literal
+        stop_map: dict[str, Literal["end_turn", "max_tokens", "tool_use", "error"]] = {
+            "stop": "end_turn",
+            "length": "max_tokens",
+            "tool_calls": "tool_use",
+            "function_call": "tool_use",
+        }
+        mapped: Literal["end_turn", "max_tokens", "tool_use", "error"] = stop_map.get(
+            finish_reason or "stop", "error"
+        )
+
+        yield ProviderStreamDone(
+            stop_reason=mapped,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )

@@ -1,6 +1,9 @@
 """Tests for OpenAIProvider — Chat Completions adapter."""
 from __future__ import annotations
 
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 from meta_harney.abstractions._types import (
@@ -10,12 +13,60 @@ from meta_harney.abstractions._types import (
     ToolCallBlock,
     ToolResultBlock,
 )
-from meta_harney.providers.base import ToolSpec
+from meta_harney.providers.base import (
+    ProviderCallConfig,
+    ProviderStreamDone,
+    ProviderStreamEvent,
+    ProviderTextDelta,
+    ToolSpec,
+)
 from meta_harney.providers.openai import (
     OpenAIProvider,
     _convert_messages_to_openai,
     _convert_tools_to_openai,
 )
+
+
+class _FakeOpenAIStream:
+    """AsyncIterable of fake chunks."""
+
+    def __init__(self, chunks: list[Any]) -> None:
+        self._chunks = chunks
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._chunks:
+            raise StopAsyncIteration
+        return self._chunks.pop(0)
+
+
+def _make_chunk(
+    *,
+    text: str | None = None,
+    finish_reason: str | None = None,
+    usage: Any | None = None,
+) -> MagicMock:
+    """Build a MagicMock chunk that mimics OpenAI ChatCompletionChunk."""
+    chunk = MagicMock()
+    choice = MagicMock()
+    delta = MagicMock()
+
+    delta.content = text
+    delta.tool_calls = None
+    choice.delta = delta
+    choice.finish_reason = finish_reason
+    chunk.choices = [choice]
+    chunk.usage = usage
+    return chunk
+
+
+def _make_usage(prompt_tokens: int, completion_tokens: int) -> MagicMock:
+    u = MagicMock()
+    u.prompt_tokens = prompt_tokens
+    u.completion_tokens = completion_tokens
+    return u
 
 
 def test_openai_provider_constructs() -> None:
@@ -160,3 +211,70 @@ def test_convert_tools_to_openai_basic() -> None:
 
 def test_convert_empty_tools() -> None:
     assert _convert_tools_to_openai([]) == []
+
+
+async def test_stream_emits_text_delta_and_done() -> None:
+    """Simple text response: chunks with text + final finish_reason."""
+    chunks = [
+        _make_chunk(text="hello "),
+        _make_chunk(text="world"),
+        _make_chunk(finish_reason="stop"),
+        _make_chunk(usage=_make_usage(prompt_tokens=10, completion_tokens=2)),
+    ]
+
+    fake_completions = MagicMock()
+    fake_completions.create = AsyncMock(return_value=_FakeOpenAIStream(chunks))
+    fake_chat = MagicMock()
+    fake_chat.completions = fake_completions
+    fake_client = MagicMock()
+    fake_client.chat = fake_chat
+
+    with patch(
+        "meta_harney.providers.openai.AsyncOpenAI",
+        return_value=fake_client,
+    ):
+        provider = OpenAIProvider(api_key="test")
+        msgs = [Message(role="user", content=[TextBlock(text="hi")])]
+        collected: list[ProviderStreamEvent] = []
+        async for ev in provider.stream(
+            messages=msgs,
+            system_prompt="be helpful",
+            tools=[],
+            config=ProviderCallConfig(model="gpt-4"),
+        ):
+            collected.append(ev)
+
+    text_events = [e for e in collected if isinstance(e, ProviderTextDelta)]
+    assert [e.text for e in text_events] == ["hello ", "world"]
+    done = [e for e in collected if isinstance(e, ProviderStreamDone)]
+    assert len(done) == 1
+    assert done[0].stop_reason == "end_turn"
+    assert done[0].input_tokens == 10
+    assert done[0].output_tokens == 2
+
+
+async def test_stream_finish_reason_length_maps_to_max_tokens() -> None:
+    chunks = [
+        _make_chunk(text="incomplete"),
+        _make_chunk(finish_reason="length"),
+    ]
+    fake_completions = MagicMock()
+    fake_completions.create = AsyncMock(return_value=_FakeOpenAIStream(chunks))
+    fake_chat = MagicMock()
+    fake_chat.completions = fake_completions
+    fake_client = MagicMock()
+    fake_client.chat = fake_chat
+
+    with patch("meta_harney.providers.openai.AsyncOpenAI", return_value=fake_client):
+        provider = OpenAIProvider(api_key="test")
+        collected = [
+            ev
+            async for ev in provider.stream(
+                messages=[Message(role="user", content=[TextBlock(text="hi")])],
+                system_prompt="",
+                tools=[],
+                config=ProviderCallConfig(model="gpt-4"),
+            )
+        ]
+    done = [e for e in collected if isinstance(e, ProviderStreamDone)]
+    assert done[0].stop_reason == "max_tokens"
