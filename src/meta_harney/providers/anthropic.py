@@ -9,8 +9,11 @@ and error classification.
 """
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncGenerator
 from typing import Any
+
+from anthropic import AsyncAnthropic
 
 from meta_harney.abstractions._types import (
     ImageBlock,
@@ -22,7 +25,10 @@ from meta_harney.abstractions._types import (
 from meta_harney.errors import ConfigurationError
 from meta_harney.providers.base import (
     ProviderCallConfig,
+    ProviderStreamDone,
     ProviderStreamEvent,
+    ProviderTextDelta,
+    ProviderToolCall,
     ToolSpec,
 )
 
@@ -115,12 +121,112 @@ class AnthropicProvider:
         self._base_url = base_url
         self._default_max_tokens = default_max_tokens
 
-    def stream(
+    async def stream(
         self,
         messages: list[Message],
         system_prompt: str,
         tools: list[ToolSpec],
         config: ProviderCallConfig,
     ) -> AsyncGenerator[ProviderStreamEvent, None]:
-        """Stream a single LLM call. Filled in by Tasks 7-10."""
-        raise NotImplementedError("Anthropic stream lands in Task 8")
+        """Stream one Anthropic Messages call.
+
+        Translates SDK SSE events into ProviderStreamEvent variants:
+        - content_block_delta with text_delta → ProviderTextDelta
+        - content_block_delta with input_json_delta → buffered into tool args
+        - content_block_stop (on tool_use) → emit ProviderToolCall
+        - message_stop → emit ProviderStreamDone with usage
+        """
+        client = AsyncAnthropic(
+            api_key=self._api_key,
+            base_url=self._base_url,
+        )
+
+        wire_messages, extracted_system = _convert_messages_to_anthropic(messages)
+        final_system = system_prompt
+        if extracted_system:
+            final_system = (
+                f"{extracted_system}\n\n{system_prompt}"
+                if system_prompt else extracted_system
+            )
+
+        wire_tools = [
+            {
+                "name": t.name,
+                "description": t.description,
+                "input_schema": t.input_schema,
+            }
+            for t in tools
+        ]
+
+        max_tokens = config.max_tokens or self._default_max_tokens
+
+        kwargs: dict[str, Any] = {
+            "model": config.model,
+            "messages": wire_messages,
+            "max_tokens": max_tokens,
+        }
+        if final_system:
+            kwargs["system"] = final_system
+        if wire_tools:
+            kwargs["tools"] = wire_tools
+        if config.temperature is not None:
+            kwargs["temperature"] = config.temperature
+
+        # Per-tool-use streaming state: block_index → {"id":..., "name":..., "json_chunks":[...]}
+        tool_use_buffer: dict[int, dict[str, Any]] = {}
+
+        async with client.messages.stream(**kwargs) as stream_:
+            async for event in stream_:
+                etype = getattr(event, "type", None)
+
+                if etype == "content_block_start":
+                    block = event.content_block  # type: ignore[union-attr]
+                    if getattr(block, "type", None) == "tool_use":
+                        tool_use_buffer[event.index] = {  # type: ignore[union-attr]
+                            "id": block.id,  # type: ignore[union-attr]
+                            "name": block.name,  # type: ignore[union-attr]
+                            "json_chunks": [],
+                        }
+
+                elif etype == "content_block_delta":
+                    delta = event.delta  # type: ignore[union-attr]
+                    dtype = getattr(delta, "type", None)
+                    if dtype == "text_delta":
+                        yield ProviderTextDelta(text=delta.text)  # type: ignore[union-attr]
+                    elif dtype == "input_json_delta":
+                        idx = event.index  # type: ignore[union-attr]
+                        if idx in tool_use_buffer:
+                            tool_use_buffer[idx]["json_chunks"].append(delta.partial_json)  # type: ignore[union-attr]
+
+                elif etype == "content_block_stop":
+                    idx = event.index  # type: ignore[union-attr]
+                    if idx in tool_use_buffer:
+                        buf = tool_use_buffer.pop(idx)
+                        raw_json = "".join(buf["json_chunks"])
+                        try:
+                            parsed_args = json.loads(raw_json) if raw_json else {}
+                        except json.JSONDecodeError:
+                            parsed_args = {}
+                        yield ProviderToolCall(
+                            invocation_id=buf["id"],
+                            name=buf["name"],
+                            args=parsed_args,
+                        )
+
+                elif etype == "message_stop":
+                    msg = event.message  # type: ignore[union-attr]
+                    usage = getattr(msg, "usage", None)
+                    raw_stop_reason = getattr(msg, "stop_reason", "end_turn")
+                    # Map Anthropic stop reasons to our Literal; unknown → "end_turn"
+                    known = {"end_turn", "tool_use", "max_tokens", "error"}
+                    stop_reason = raw_stop_reason if raw_stop_reason in known else "end_turn"
+                    yield ProviderStreamDone(
+                        stop_reason=stop_reason,  # type: ignore[arg-type]
+                        input_tokens=(
+                            getattr(usage, "input_tokens", None) if usage else None
+                        ),
+                        output_tokens=(
+                            getattr(usage, "output_tokens", None) if usage else None
+                        ),
+                    )
+                    return
