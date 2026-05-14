@@ -29,6 +29,7 @@ from meta_harney.providers.base import (
     ToolSpec,
 )
 from meta_harney.providers.fake import FakeLLMProvider, FakeRound
+from tests.contracts.multi_agent_backend import MultiAgentBackendContract
 
 
 async def test_child_prompt_builder_returns_instructions() -> None:
@@ -404,3 +405,26 @@ async def test_join_timeout_raises_child_timeout_error() -> None:
 
     # Cleanup the still-running task
     await backend.cancel(handle.child_session_id)
+
+
+class TestInProcessMultiAgentBackendContract(MultiAgentBackendContract):
+    """Inherits all standard MultiAgentBackend contract tests."""
+
+    def make_backend_and_store(self) -> tuple[InProcessMultiAgentBackend, MemorySessionStore]:
+        store = MemorySessionStore()
+        backend = InProcessMultiAgentBackend(
+            provider=FakeLLMProvider(rounds=[
+                FakeRound(text="contract test result", stop_reason="end_turn"),
+                FakeRound(text="contract test result", stop_reason="end_turn"),
+                FakeRound(text="contract test result", stop_reason="end_turn"),
+                FakeRound(text="contract test result", stop_reason="end_turn"),
+                FakeRound(text="contract test result", stop_reason="end_turn"),
+            ]),
+            permission_resolver=AllowAllPermissionResolver(),
+            session_store=store,
+            trace_sink=NullSink(),
+            config=RuntimeConfig(model="fake"),
+            all_tools={},
+            hooks=[],
+        )
+        return backend, store
