@@ -954,9 +954,7 @@ async def test_tool_error_recovery_e2e() -> None:
         description: ClassVar[str] = "Query the database."
         input_schema: ClassVar[type[BaseModel]] = _QueryInput
 
-        async def execute(
-            self, inv: ToolInvocation, ctx: ToolContext
-        ) -> ToolResult:
+        async def execute(self, inv: ToolInvocation, ctx: ToolContext) -> ToolResult:
             raise RuntimeError("DB unreachable")
 
     rt = runtime_for_testing(

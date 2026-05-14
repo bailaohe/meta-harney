@@ -208,9 +208,7 @@ class AnthropicProvider:
                         if dtype == "text_delta":
                             yield ProviderTextDelta(text=delta.text)  # type: ignore[union-attr]
                         elif dtype == "thinking_delta":
-                            yield ProviderThinkingDelta(
-                                text=getattr(delta, "thinking", "")
-                            )
+                            yield ProviderThinkingDelta(text=getattr(delta, "thinking", ""))
                         elif dtype == "input_json_delta":
                             idx = event.index  # type: ignore[union-attr]
                             if idx in tool_use_buffer:

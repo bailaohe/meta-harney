@@ -612,7 +612,7 @@ async def test_anthropic_thinking_delta_emits_provider_thinking_delta() -> None:
     msg_stop.message.stop_reason = "end_turn"
     msg_stop.message.usage = None
 
-    events = [cb_start, cb_delta, cb_stop, msg_stop]
+    events: list[object] = [cb_start, cb_delta, cb_stop, msg_stop]
 
     class _FakeStreamCM:
         def __init__(self, evs: list[object]) -> None:
@@ -681,7 +681,7 @@ async def test_anthropic_redacted_thinking_silently_skipped() -> None:
     msg_stop.message.stop_reason = "end_turn"
     msg_stop.message.usage = None
 
-    events = [cb_start, cb_stop, msg_stop]
+    events: list[object] = [cb_start, cb_stop, msg_stop]
 
     class _FakeStreamCM:
         def __init__(self, evs: list[object]) -> None:
