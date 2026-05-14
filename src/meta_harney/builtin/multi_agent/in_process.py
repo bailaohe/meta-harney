@@ -62,7 +62,92 @@ class InProcessMultiAgentBackend:
         parent_session_id: str,
         mode: Literal["blocking", "detached"] = "blocking",
     ) -> SpawnHandle:
-        raise NotImplementedError("Task 8 implements blocking; Task 9 detached")
+        if mode not in ("blocking", "detached"):
+            raise ValueError(f"unknown spawn mode: {mode!r}")
+
+        # Create child session linked to parent
+        import uuid as _uuid
+        from datetime import datetime, timezone
+
+        from meta_harney.abstractions.session import Session
+
+        parent = await self._session_store.load(parent_session_id)
+        child_id = f"child-{_uuid.uuid4().hex[:12]}"
+        child = Session(
+            id=child_id,
+            tenant_id=parent.tenant_id if parent else None,
+            user_id=parent.user_id if parent else None,
+            parent_session_id=parent_session_id,
+            created_at=datetime.now(timezone.utc),
+        )
+        await self._session_store.save(child)
+
+        # Filter parent's toolset to those allowed in the spec
+        child_tools = {
+            name: tool
+            for name, tool in self._all_tools.items()
+            if name in spec.allowed_tools
+        }
+
+        # Build a config that respects spec.max_iters
+        child_config = self._config.model_copy(update={"max_iterations": spec.max_iters})
+
+        # Run the child agent and capture the final assistant text as ToolResult
+        if mode == "blocking":
+            result = await self._run_child(
+                child_id=child_id,
+                initial_message=initial_message,
+                instructions=spec.instructions,
+                child_tools=child_tools,
+                child_config=child_config,
+            )
+            self._results[child_id] = result
+            return SpawnHandle(child_session_id=child_id, mode="blocking")
+
+        # detached — Task 9 implements this; for now, raise
+        raise NotImplementedError("detached mode lands in Task 9")
+
+    async def _run_child(
+        self,
+        *,
+        child_id: str,
+        initial_message: str,
+        instructions: str,
+        child_tools: dict[str, BaseTool],
+        child_config: RuntimeConfig,
+    ) -> ToolResult:
+        """Run one child agent turn; return final assistant text as ToolResult."""
+        from meta_harney.abstractions._types import Message, TextBlock
+        from meta_harney.builtin.multi_agent.child_prompt import _ChildPromptBuilder
+        from meta_harney.engine.loop import run_turn
+        from meta_harney.engine.stream_events import TextDelta
+
+        child_builder = _ChildPromptBuilder(
+            instructions=instructions,
+            session_store=self._session_store,
+        )
+        user_msg = Message(role="user", content=[TextBlock(text=initial_message)])
+        assistant_text_chunks: list[str] = []
+
+        async for ev in run_turn(
+            session_id=child_id,
+            user_message=user_msg,
+            provider=self._provider,
+            prompt_builder=child_builder,
+            permission_resolver=self._permission_resolver,
+            tools=child_tools,
+            hooks=self._hooks,
+            session_store=self._session_store,
+            trace_sink=self._trace_sink,
+            config=child_config,
+            compaction=self._compaction,
+            token_counter=self._token_counter,
+        ):
+            if isinstance(ev, TextDelta):
+                assistant_text_chunks.append(ev.text)
+
+        final_text = "".join(assistant_text_chunks)
+        return ToolResult(success=True, output=final_text)
 
     async def join(
         self,
