@@ -7,4 +7,21 @@
 export { NewlineFraming, ContentLengthFraming } from "./framing.js";
 export type { Framing } from "./framing.js";
 
+export {
+  parseIncoming,
+  encodeRequest,
+  encodeNotification,
+  encodeResponse,
+  encodeError,
+} from "./protocol.js";
+export type {
+  JsonRpcError,
+  JsonRpcRequest,
+  JsonRpcResponse,
+  JsonRpcNotification,
+  IncomingMessage,
+} from "./protocol.js";
+
+export { BridgeError, BridgeCancelled, BridgeDisconnected } from "./errors.js";
+
 export const VERSION = "0.1.0";
