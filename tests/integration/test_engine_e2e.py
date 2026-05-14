@@ -998,3 +998,47 @@ async def test_tool_error_recovery_e2e() -> None:
     tool_block = tool_msg.content[0]
     assert getattr(tool_block, "success", True) is False
     assert "DB unreachable" in (getattr(tool_block, "error", "") or "")
+
+
+async def test_multi_turn_session_e2e() -> None:
+    """Two consecutive invoke() calls share history (spec §8.4 #4).
+
+    - Turn 1: user asks Q1, assistant answers A1
+    - Turn 2: user asks Q2; provider sees [Q1, A1, Q2] as messages
+    - Final session.messages = [user(Q1), assistant(A1), user(Q2), assistant(A2)]
+    """
+    from meta_harney.testing import runtime_for_testing
+
+    rounds = [
+        FakeRound(text="4", stop_reason="end_turn"),
+        FakeRound(text="8", stop_reason="end_turn"),
+    ]
+    provider = FakeLLMProvider(rounds=rounds)
+
+    # Build the runtime via the test factory, then swap in our hand-built provider
+    # so we can inspect provider.calls after the turns
+    rt = runtime_for_testing(scripted_rounds=rounds)
+    rt._provider = provider
+
+    session = await rt.create_session()
+
+    final1 = await rt.invoke(session.id, "What's 2+2?")
+    assert "4" in final1.content[0].text  # type: ignore[union-attr]
+
+    final2 = await rt.invoke(session.id, "And then double it?")
+    assert "8" in final2.content[0].text  # type: ignore[union-attr]
+
+    # Final session state has the full history
+    refreshed = await rt._session_store.load(session.id)
+    assert refreshed is not None
+    roles = [m.role for m in refreshed.messages]
+    assert roles == ["user", "assistant", "user", "assistant"]
+
+    # Provider's second call saw the first turn's user+assistant in messages
+    assert len(provider.calls) == 2
+    second_call_roles = [m.role for m in provider.calls[1].messages]
+    # Second call's messages must include Q1 and A1
+    assert "user" in second_call_roles
+    assert "assistant" in second_call_roles
+    # And the second turn's user message ("And then double it?") is also there
+    assert second_call_roles.count("user") >= 2
