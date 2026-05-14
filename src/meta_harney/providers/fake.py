@@ -20,6 +20,7 @@ from meta_harney.providers.base import (
     ProviderStreamDone,
     ProviderStreamEvent,
     ProviderTextDelta,
+    ProviderThinkingDelta,
     ProviderToolCall,
     ToolSpec,
 )
@@ -30,6 +31,7 @@ class FakeRound(BaseModel):
 
     text: str = ""
     split_on: str | None = None  # if set, text is split and each chunk emitted as a delta
+    thinking: str | None = None  # if set, emits a ProviderThinkingDelta before text
     tool_calls: list[ProviderToolCall] = []
     stop_reason: Literal["end_turn", "tool_use", "max_tokens", "error"] = "end_turn"
     input_tokens: int | None = None
@@ -77,6 +79,10 @@ class FakeLLMProvider:
             )
         round_ = self.rounds[self._index]
         self._index += 1
+
+        # Emit thinking (if any) before any visible output
+        if round_.thinking is not None:
+            yield ProviderThinkingDelta(text=round_.thinking)
 
         # Emit text (chunked if split_on set)
         if round_.text:
