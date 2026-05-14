@@ -30,7 +30,10 @@ from meta_harney.engine.stream_events import (
     ToolCallStarted,
     TurnCompleted,
 )
-from meta_harney.engine.tool_dispatch import execute_tool
+from meta_harney.engine.tool_dispatch import (
+    _execute_after_permission,
+    check_permission_for_tool,
+)
 from meta_harney.engine.tracing import emit_event, new_span_id
 from meta_harney.errors import SessionNotFoundError
 from meta_harney.providers.base import (
@@ -248,15 +251,9 @@ async def run_turn(
                 iteration += 1
                 break
 
-            # Dispatch each tool call (pre_tool / post_tool fire inside execute_tool)
+            # Dispatch each tool call (pre_tool / post_tool fire inside _execute_after_permission)
             tool_result_blocks: list[ContentBlock] = []
             for tc in tool_calls:
-                yield ToolCallStarted(
-                    tool_name=tc.name,
-                    invocation_id=tc.invocation_id,
-                    args=tc.args,
-                )
-
                 inv = ToolInvocation(
                     name=tc.name,
                     args=tc.args,
@@ -266,28 +263,45 @@ async def run_turn(
 
                 tool = tools.get(tc.name)
                 if tool is None:
+                    # Tool not registered — no permission check, no ToolCallStarted
                     result = await _result_for_unknown_tool(
                         inv=inv,
                         sink=trace_sink,
                         parent_span=turn_span,
                     )
                 else:
-                    ctx = ToolContext(
-                        session_store=session_store,
-                        trace_sink=trace_sink,
-                        current_span_id=turn_span,
-                        new_span_id=new_span_id,
-                        multi_agent=multi_agent,
+                    # Step A: permission check
+                    pre_denial = await check_permission_for_tool(
+                        inv,
+                        permission_resolver,
+                        trace_sink,
+                        turn_span,
+                        new_span_id,
                     )
-                    result = await execute_tool(
-                        invocation=inv,
-                        tool=tool,
-                        permission_resolver=permission_resolver,
-                        hooks=hooks,
-                        ctx=ctx,
-                        config=config,
-                        parent_span_id=turn_span,
-                    )
+                    if pre_denial is not None:
+                        result = pre_denial
+                    else:
+                        # Step B: permission cleared — NOW yield ToolCallStarted
+                        yield ToolCallStarted(
+                            tool_name=tc.name,
+                            invocation_id=tc.invocation_id,
+                            args=tc.args,
+                        )
+                        ctx = ToolContext(
+                            session_store=session_store,
+                            trace_sink=trace_sink,
+                            current_span_id=turn_span,
+                            new_span_id=new_span_id,
+                            multi_agent=multi_agent,
+                        )
+                        result = await _execute_after_permission(
+                            invocation=inv,
+                            tool=tool,
+                            hooks=hooks,
+                            ctx=ctx,
+                            config=config,
+                            parent_span_id=turn_span,
+                        )
 
                 tool_result_blocks.append(
                     ToolResultBlock(

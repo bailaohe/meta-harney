@@ -219,6 +219,10 @@ async def test_permission_denied_e2e() -> None:
     assert not completed[0].result.success
     assert "deny" in (completed[0].result.error or "").lower()
 
+    # ToolCallStarted should NOT have been emitted (permission denied before exec)
+    started = [e for e in events if isinstance(e, ToolCallStarted)]
+    assert len(started) == 0
+
     # LLM was asked twice (initial + recovery)
     assert len(provider.calls) == 2
 
