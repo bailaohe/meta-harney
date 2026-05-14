@@ -382,14 +382,14 @@ async def test_join_unknown_child_raises() -> None:
         await backend.join("nonexistent-id")
 
 
-async def test_join_timeout_raises_child_timeout_error() -> None:
-    """join(timeout=...) raises ChildTimeoutError if exceeded."""
+async def test_join_timeout_raises_and_cancels_task() -> None:
+    """join(timeout=...) raises ChildTimeoutError AND auto-cancels the underlying task."""
     store = MemorySessionStore()
     parent = Session(id="parent-t1", created_at=datetime.now(timezone.utc))
     await store.save(parent)
 
     backend = InProcessMultiAgentBackend(
-        provider=_BlockingProvider(),
+        provider=_BlockingProvider(),  # type: ignore[arg-type]
         permission_resolver=AllowAllPermissionResolver(),
         session_store=store,
         trace_sink=NullSink(),
@@ -400,15 +400,16 @@ async def test_join_timeout_raises_child_timeout_error() -> None:
 
     handle = await backend.spawn(
         spec=AgentSpec(name="x", instructions="y", allowed_tools=[]),
-        initial_message="go",
-        parent_session_id="parent-t1",
-        mode="detached",
+        initial_message="go", parent_session_id="parent-t1", mode="detached",
     )
     with pytest.raises(ChildTimeoutError):
         await backend.join(handle.child_session_id, timeout=0.1)
 
-    # Cleanup the still-running task
-    await backend.cancel(handle.child_session_id)
+    # After timeout, the underlying task should be cancelled — no leak.
+    # Allow asyncio one tick to process cancellation.
+    await asyncio.sleep(0.05)
+    final_status = await backend.status(handle.child_session_id)
+    assert final_status == TaskState.CANCELLED
 
 
 class TestInProcessMultiAgentBackendContract(MultiAgentBackendContract):

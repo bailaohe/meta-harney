@@ -180,6 +180,12 @@ class InProcessMultiAgentBackend:
             else:
                 result = await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
         except asyncio.TimeoutError as exc:
+            # Auto-cancel the underlying task to prevent leak
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
             raise ChildTimeoutError(
                 f"child {child_session_id!r} did not complete within {timeout}s"
             ) from exc
