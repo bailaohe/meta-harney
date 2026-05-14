@@ -34,6 +34,7 @@ from meta_harney.providers.base import (
     ProviderStreamDone,
     ProviderStreamEvent,
     ProviderTextDelta,
+    ProviderThinkingDelta,
     ProviderToolCall,
     ToolSpec,
 )
@@ -120,12 +121,14 @@ class AnthropicProvider:
         api_key: str,
         base_url: str | None = None,
         default_max_tokens: int = 4096,
+        thinking_budget: int | None = None,
     ) -> None:
         if not api_key:
             raise ConfigurationError("AnthropicProvider requires a non-empty api_key")
         self._api_key = api_key
         self._base_url = base_url
         self._default_max_tokens = default_max_tokens
+        self._thinking_budget = thinking_budget
 
     async def stream(
         self,
@@ -176,6 +179,11 @@ class AnthropicProvider:
             kwargs["tools"] = wire_tools
         if config.temperature is not None:
             kwargs["temperature"] = config.temperature
+        if self._thinking_budget is not None:
+            kwargs["thinking"] = {
+                "type": "enabled",
+                "budget_tokens": self._thinking_budget,
+            }
 
         # Per-tool-use streaming state: block_index → {"id":..., "name":..., "json_chunks":[...]}
         tool_use_buffer: dict[int, dict[str, Any]] = {}
@@ -199,6 +207,10 @@ class AnthropicProvider:
                         dtype = getattr(delta, "type", None)
                         if dtype == "text_delta":
                             yield ProviderTextDelta(text=delta.text)  # type: ignore[union-attr]
+                        elif dtype == "thinking_delta":
+                            yield ProviderThinkingDelta(
+                                text=getattr(delta, "thinking", "")
+                            )
                         elif dtype == "input_json_delta":
                             idx = event.index  # type: ignore[union-attr]
                             if idx in tool_use_buffer:

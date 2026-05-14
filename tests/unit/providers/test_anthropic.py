@@ -487,3 +487,235 @@ def test_provider_thinking_delta_construction() -> None:
         pass
 
     accepts_event(ev)  # type-checker enforcement; no runtime assertion needed
+
+
+async def test_anthropic_thinking_budget_passed_through() -> None:
+    """Provider with thinking_budget=N adds thinking kwarg to API call."""
+    from unittest.mock import MagicMock, patch
+
+    from meta_harney.abstractions._types import Message, TextBlock
+    from meta_harney.providers.anthropic import AnthropicProvider
+    from meta_harney.providers.base import ProviderCallConfig
+
+    captured_kwargs: dict[str, object] = {}
+
+    class _FakeStreamCM:
+        async def __aenter__(self) -> _FakeStreamCM:
+            return self
+
+        async def __aexit__(self, *_a: object) -> None:
+            return None
+
+        def __aiter__(self) -> _FakeStreamCM:
+            return self
+
+        async def __anext__(self) -> None:
+            raise StopAsyncIteration
+
+    def _fake_stream(**kwargs: object) -> _FakeStreamCM:
+        captured_kwargs.update(kwargs)
+        return _FakeStreamCM()
+
+    fake_client = MagicMock()
+    fake_client.messages.stream = _fake_stream
+
+    with patch("meta_harney.providers.anthropic.AsyncAnthropic", return_value=fake_client):
+        provider = AnthropicProvider(api_key="test", thinking_budget=4096)
+        async for _ev in provider.stream(
+            messages=[Message(role="user", content=[TextBlock(text="hi")])],
+            system_prompt="",
+            tools=[],
+            config=ProviderCallConfig(model="claude-sonnet-4-5"),
+        ):
+            pass
+
+    assert captured_kwargs.get("thinking") == {"type": "enabled", "budget_tokens": 4096}
+
+
+async def test_anthropic_no_thinking_kwarg_when_budget_none() -> None:
+    """Provider with default thinking_budget=None does NOT add thinking kwarg."""
+    from unittest.mock import MagicMock, patch
+
+    from meta_harney.abstractions._types import Message, TextBlock
+    from meta_harney.providers.anthropic import AnthropicProvider
+    from meta_harney.providers.base import ProviderCallConfig
+
+    captured_kwargs: dict[str, object] = {}
+
+    class _FakeStreamCM:
+        async def __aenter__(self) -> _FakeStreamCM:
+            return self
+
+        async def __aexit__(self, *_a: object) -> None:
+            return None
+
+        def __aiter__(self) -> _FakeStreamCM:
+            return self
+
+        async def __anext__(self) -> None:
+            raise StopAsyncIteration
+
+    def _fake_stream(**kwargs: object) -> _FakeStreamCM:
+        captured_kwargs.update(kwargs)
+        return _FakeStreamCM()
+
+    fake_client = MagicMock()
+    fake_client.messages.stream = _fake_stream
+
+    with patch("meta_harney.providers.anthropic.AsyncAnthropic", return_value=fake_client):
+        provider = AnthropicProvider(api_key="test")
+        async for _ev in provider.stream(
+            messages=[Message(role="user", content=[TextBlock(text="hi")])],
+            system_prompt="",
+            tools=[],
+            config=ProviderCallConfig(model="claude-sonnet-4-5"),
+        ):
+            pass
+
+    assert "thinking" not in captured_kwargs
+
+
+async def test_anthropic_thinking_delta_emits_provider_thinking_delta() -> None:
+    """SSE thinking_delta → ProviderThinkingDelta."""
+    from unittest.mock import MagicMock, patch
+
+    from meta_harney.abstractions._types import Message, TextBlock
+    from meta_harney.providers.anthropic import AnthropicProvider
+    from meta_harney.providers.base import (
+        ProviderCallConfig,
+        ProviderStreamDone,
+        ProviderThinkingDelta,
+    )
+
+    # Build fake SSE events: content_block_start(thinking) → content_block_delta(thinking_delta)
+    # → content_block_stop → message_stop
+    cb_start = MagicMock()
+    cb_start.type = "content_block_start"
+    cb_start.index = 0
+    cb_start.content_block = MagicMock()
+    cb_start.content_block.type = "thinking"
+
+    cb_delta = MagicMock()
+    cb_delta.type = "content_block_delta"
+    cb_delta.index = 0
+    cb_delta.delta = MagicMock()
+    cb_delta.delta.type = "thinking_delta"
+    cb_delta.delta.thinking = "let me think..."
+
+    cb_stop = MagicMock()
+    cb_stop.type = "content_block_stop"
+    cb_stop.index = 0
+
+    msg_stop = MagicMock()
+    msg_stop.type = "message_stop"
+    msg_stop.message = MagicMock()
+    msg_stop.message.stop_reason = "end_turn"
+    msg_stop.message.usage = None
+
+    events = [cb_start, cb_delta, cb_stop, msg_stop]
+
+    class _FakeStreamCM:
+        def __init__(self, evs: list[object]) -> None:
+            self._evs = evs
+
+        async def __aenter__(self) -> _FakeStreamCM:
+            return self
+
+        async def __aexit__(self, *_a: object) -> None:
+            return None
+
+        def __aiter__(self) -> _FakeStreamCM:
+            return self
+
+        async def __anext__(self) -> object:
+            if not self._evs:
+                raise StopAsyncIteration
+            return self._evs.pop(0)
+
+    fake_client = MagicMock()
+    fake_client.messages.stream = lambda **_kw: _FakeStreamCM(events)
+
+    with patch("meta_harney.providers.anthropic.AsyncAnthropic", return_value=fake_client):
+        provider = AnthropicProvider(api_key="test", thinking_budget=4096)
+        collected: list[ProviderStreamEvent] = []
+        async for ev in provider.stream(
+            messages=[Message(role="user", content=[TextBlock(text="hi")])],
+            system_prompt="",
+            tools=[],
+            config=ProviderCallConfig(model="claude-sonnet-4-5"),
+        ):
+            collected.append(ev)
+
+    thinking = [e for e in collected if isinstance(e, ProviderThinkingDelta)]
+    assert len(thinking) == 1
+    assert thinking[0].text == "let me think..."
+    done = [e for e in collected if isinstance(e, ProviderStreamDone)]
+    assert len(done) == 1
+
+
+async def test_anthropic_redacted_thinking_silently_skipped() -> None:
+    """redacted_thinking content block → no event, no error."""
+    from unittest.mock import MagicMock, patch
+
+    from meta_harney.abstractions._types import Message, TextBlock
+    from meta_harney.providers.anthropic import AnthropicProvider
+    from meta_harney.providers.base import (
+        ProviderCallConfig,
+        ProviderStreamDone,
+        ProviderThinkingDelta,
+    )
+
+    cb_start = MagicMock()
+    cb_start.type = "content_block_start"
+    cb_start.index = 0
+    cb_start.content_block = MagicMock()
+    cb_start.content_block.type = "redacted_thinking"
+
+    cb_stop = MagicMock()
+    cb_stop.type = "content_block_stop"
+    cb_stop.index = 0
+
+    msg_stop = MagicMock()
+    msg_stop.type = "message_stop"
+    msg_stop.message = MagicMock()
+    msg_stop.message.stop_reason = "end_turn"
+    msg_stop.message.usage = None
+
+    events = [cb_start, cb_stop, msg_stop]
+
+    class _FakeStreamCM:
+        def __init__(self, evs: list[object]) -> None:
+            self._evs = evs
+
+        async def __aenter__(self) -> _FakeStreamCM:
+            return self
+
+        async def __aexit__(self, *_a: object) -> None:
+            return None
+
+        def __aiter__(self) -> _FakeStreamCM:
+            return self
+
+        async def __anext__(self) -> object:
+            if not self._evs:
+                raise StopAsyncIteration
+            return self._evs.pop(0)
+
+    fake_client = MagicMock()
+    fake_client.messages.stream = lambda **_kw: _FakeStreamCM(events)
+
+    with patch("meta_harney.providers.anthropic.AsyncAnthropic", return_value=fake_client):
+        provider = AnthropicProvider(api_key="test", thinking_budget=4096)
+        collected: list[ProviderStreamEvent] = []
+        async for ev in provider.stream(
+            messages=[Message(role="user", content=[TextBlock(text="hi")])],
+            system_prompt="",
+            tools=[],
+            config=ProviderCallConfig(model="claude-sonnet-4-5"),
+        ):
+            collected.append(ev)
+
+    # No ProviderThinkingDelta yielded
+    assert not any(isinstance(e, ProviderThinkingDelta) for e in collected)
+    # Stream completes normally
+    assert any(isinstance(e, ProviderStreamDone) for e in collected)
