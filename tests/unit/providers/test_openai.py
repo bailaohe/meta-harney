@@ -10,7 +10,9 @@ import pytest
 from meta_harney.abstractions._types import (
     ImageBlock,
     Message,
+    RedactedThinkingBlock,
     TextBlock,
+    ThinkingBlock,
     ToolCallBlock,
     ToolResultBlock,
 )
@@ -578,3 +580,24 @@ class TestOpenAIProviderContract(LLMProviderContract):
 
     def make_provider(self) -> LLMProvider:
         return OpenAIProvider(api_key="test-contract")
+
+
+def test_openai_skips_thinking_and_redacted_blocks() -> None:
+    """Assistant message containing ThinkingBlock + RedactedThinkingBlock is
+    converted as if those blocks were not there. OpenAI Chat Completions
+    has no concept of thinking blocks."""
+    msgs = [
+        Message(
+            role="assistant",
+            content=[
+                ThinkingBlock(text="reasoning", signature="sig"),
+                RedactedThinkingBlock(data="opaque"),
+                TextBlock(text="visible answer"),
+            ],
+        ),
+    ]
+    converted = _convert_messages_to_openai(msgs, system_prompt="")
+    # Single assistant message, content is the visible text only
+    assert len(converted) == 1
+    assert converted[0]["role"] == "assistant"
+    assert converted[0]["content"] == "visible answer"

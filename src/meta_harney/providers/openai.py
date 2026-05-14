@@ -20,7 +20,9 @@ from meta_harney.abstractions._serialize import _serialize_tool_output
 from meta_harney.abstractions._types import (
     ImageBlock,
     Message,
+    RedactedThinkingBlock,
     TextBlock,
+    ThinkingBlock,
     ToolCallBlock,
     ToolResultBlock,
 )
@@ -118,6 +120,9 @@ def _convert_messages_to_openai(
                         },
                     }
                 )
+            elif isinstance(block, (ThinkingBlock, RedactedThinkingBlock)):
+                # OpenAI Chat Completions has no thinking concept; skip silently.
+                continue
             # ToolResultBlock in user/assistant message is unexpected — skip
 
         entry: dict[str, Any] = {"role": msg.role}
