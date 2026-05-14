@@ -21,7 +21,7 @@ from meta_harney.builtin.permission.allow_all import AllowAllPermissionResolver
 from meta_harney.builtin.session.memory_store import MemorySessionStore
 from meta_harney.builtin.trace.null_sink import NullSink
 from meta_harney.engine.config import RuntimeConfig
-from meta_harney.errors import ChildTimeoutError
+from meta_harney.errors import ChildNotFoundError, ChildTimeoutError
 from meta_harney.providers.base import (
     ProviderCallConfig,
     ProviderStreamDone,
@@ -378,7 +378,7 @@ async def test_join_unknown_child_raises() -> None:
         all_tools={},
         hooks=[],
     )
-    with pytest.raises(KeyError, match="no such child"):
+    with pytest.raises(ChildNotFoundError, match="no such child"):
         await backend.join("nonexistent-id")
 
 
@@ -434,3 +434,35 @@ class TestInProcessMultiAgentBackendContract(MultiAgentBackendContract):
             hooks=[],
         )
         return backend, store
+
+
+async def test_status_unknown_child_raises() -> None:
+    """status() raises ChildNotFoundError for unknown child_session_id (symmetry with join)."""
+    store = MemorySessionStore()
+    backend = InProcessMultiAgentBackend(
+        provider=FakeLLMProvider(rounds=[]),
+        permission_resolver=AllowAllPermissionResolver(),
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="fake"),
+        all_tools={},
+        hooks=[],
+    )
+    with pytest.raises(ChildNotFoundError, match="no such child"):
+        await backend.status("nonexistent-id")
+
+
+async def test_join_unknown_child_now_raises_child_not_found() -> None:
+    """join() raises ChildNotFoundError (refined from generic KeyError)."""
+    store = MemorySessionStore()
+    backend = InProcessMultiAgentBackend(
+        provider=FakeLLMProvider(rounds=[]),
+        permission_resolver=AllowAllPermissionResolver(),
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="fake"),
+        all_tools={},
+        hooks=[],
+    )
+    with pytest.raises(ChildNotFoundError, match="no such child"):
+        await backend.join("nonexistent-id")

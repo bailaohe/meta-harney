@@ -132,5 +132,9 @@ class SpawnError(MultiAgentError):
     """Failed to spawn a child agent."""
 
 
+class ChildNotFoundError(MultiAgentError):
+    """No child agent with the given child_session_id exists in this backend."""
+
+
 class ChildTimeoutError(MultiAgentError):
     """Child agent did not return within the join timeout."""

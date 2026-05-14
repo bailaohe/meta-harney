@@ -168,7 +168,9 @@ class InProcessMultiAgentBackend:
 
         task = self._tasks.get(child_session_id)
         if task is None:
-            raise KeyError(f"no such child: {child_session_id!r}")
+            from meta_harney.errors import ChildNotFoundError
+
+            raise ChildNotFoundError(f"no such child: {child_session_id!r}")
 
         from meta_harney.errors import ChildTimeoutError
 
@@ -189,7 +191,9 @@ class InProcessMultiAgentBackend:
             return TaskState.SUCCEEDED
         task = self._tasks.get(child_session_id)
         if task is None:
-            return TaskState.PENDING  # unknown child — treat as not yet started
+            from meta_harney.errors import ChildNotFoundError
+
+            raise ChildNotFoundError(f"no such child: {child_session_id!r}")
         if task.cancelled():
             return TaskState.CANCELLED
         if task.done():

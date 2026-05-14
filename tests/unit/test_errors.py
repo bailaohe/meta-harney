@@ -3,6 +3,7 @@
 import pytest
 
 from meta_harney.errors import (
+    ChildNotFoundError,
     ChildTimeoutError,
     CompactionError,
     ConfigurationError,
@@ -65,6 +66,7 @@ def test_top_level_subclasses_root(exc_cls):
         (SessionStoreError, SessionError),
         (SpawnError, MultiAgentError),
         (ChildTimeoutError, MultiAgentError),
+        (ChildNotFoundError, MultiAgentError),
     ],
 )
 def test_nested_hierarchy(child, parent):
