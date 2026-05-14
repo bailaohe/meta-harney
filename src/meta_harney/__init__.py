@@ -1,9 +1,9 @@
 """meta_harney — domain-agnostic agent runtime SDK.
 
-Phase 2 status: engine + provider layer added. Runtime config, streaming
-event types, retry policy, and LLMProvider Protocol are now part of the
-public surface. Abstractions and builtin defaults from Phase 1 are retained.
-Multi-agent backends land in subsequent phases.
+Phase 3 status: AgentRuntime facade and InProcessMultiAgentBackend added.
+Runtime config, streaming event types, retry policy, and LLMProvider Protocol
+are part of the public surface. Abstractions and builtin defaults from
+Phase 1 are retained. Full multi-agent support is now available.
 """
 
 from meta_harney.abstractions import (
@@ -35,6 +35,7 @@ from meta_harney.abstractions import (
     TraceEvent,
     TraceSink,
 )
+from meta_harney.builtin.multi_agent.in_process import InProcessMultiAgentBackend
 from meta_harney.engine.config import RuntimeConfig, tool_to_spec
 from meta_harney.engine.loop import run_turn
 from meta_harney.engine.retry import RetryConfig
@@ -57,10 +58,13 @@ from meta_harney.providers.base import (
     ProviderToolCall,
     ToolSpec,
 )
+from meta_harney.runtime import AgentRuntime
 
 __version__ = "0.0.2"
 
 __all__ = [
+    # runtime facade
+    "AgentRuntime",
     # multi-agent
     "AgentSpec",
     # hook
@@ -77,6 +81,8 @@ __all__ = [
     "HookEvent",
     "HookEventKind",
     "ImageBlock",
+    # builtin backends
+    "InProcessMultiAgentBackend",
     # engine stream events
     "IterationCompleted",
     # provider protocol
