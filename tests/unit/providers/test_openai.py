@@ -517,6 +517,39 @@ async def test_openai_401_maps_to_non_retryable() -> None:
                 pass
 
 
+def test_convert_tool_result_with_dict_output_serializes_json() -> None:
+    """Successful ToolResult with dict output uses JSON, not Python repr."""
+    msgs = [
+        Message(
+            role="tool",
+            content=[
+                ToolResultBlock(
+                    invocation_id="c1",
+                    success=True,
+                    output={"id": "C-001", "name": "Acme"},
+                ),
+            ],
+        ),
+    ]
+    converted = _convert_messages_to_openai(msgs, system_prompt="")
+    assert converted[0]["role"] == "tool"
+    assert converted[0]["content"] == '{"id": "C-001", "name": "Acme"}'
+
+
+def test_convert_tool_result_with_none_output_empty_content() -> None:
+    """Successful ToolResult with output=None produces empty content, not 'None'."""
+    msgs = [
+        Message(
+            role="tool",
+            content=[
+                ToolResultBlock(invocation_id="c1", success=True, output=None),
+            ],
+        ),
+    ]
+    converted = _convert_messages_to_openai(msgs, system_prompt="")
+    assert converted[0]["content"] == ""
+
+
 class TestOpenAIProviderContract(LLMProviderContract):
     """OpenAIProvider passes the standard LLMProvider contract."""
 

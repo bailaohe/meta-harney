@@ -16,6 +16,7 @@ from typing import Any, Literal
 
 from openai import APIConnectionError, APIStatusError, AsyncOpenAI, RateLimitError
 
+from meta_harney.abstractions._serialize import _serialize_tool_output
 from meta_harney.abstractions._types import (
     ImageBlock,
     Message,
@@ -71,12 +72,15 @@ def _convert_messages_to_openai(
             # Tool result: one ToolResultBlock per OpenAI tool message
             for block in msg.content:
                 if isinstance(block, ToolResultBlock):
-                    content_str = block.error if not block.success else str(block.output)
+                    if block.success:
+                        content_str = _serialize_tool_output(block.output)
+                    else:
+                        content_str = _serialize_tool_output(block.error)
                     out.append(
                         {
                             "role": "tool",
                             "tool_call_id": block.invocation_id,
-                            "content": content_str or "",
+                            "content": content_str,
                         }
                     )
             continue
