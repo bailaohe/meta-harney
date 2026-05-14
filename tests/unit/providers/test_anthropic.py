@@ -26,6 +26,7 @@ from meta_harney.providers.base import (
     ProviderTextDelta,
     ProviderToolCall,
 )
+from tests.contracts.llm_provider import LLMProviderContract
 
 
 def test_anthropic_provider_constructs() -> None:
@@ -138,7 +139,7 @@ class _FakeAnthropicStream:
     def __init__(self, events: list[Any]) -> None:
         self._events = events
 
-    async def __aenter__(self) -> "_FakeAnthropicStream":
+    async def __aenter__(self) -> _FakeAnthropicStream:
         return self
 
     async def __aexit__(self, *args: Any) -> None:
@@ -366,3 +367,46 @@ async def test_anthropic_401_maps_to_non_retryable() -> None:
                 config=ProviderCallConfig(model="claude-sonnet-4-5"),
             ):
                 pass
+
+
+class TestAnthropicProviderContract(LLMProviderContract):
+    """AnthropicProvider passes the standard LLMProvider contract.
+
+    Tests use a mocked anthropic SDK client returning a single text round.
+    A new mock is set up per `make_provider()` call so the contract suite's
+    repeated invocations don't share state.
+    """
+
+    def make_provider(self):
+        text_block = _make_event(
+            "content_block_delta",
+            index=0,
+            delta=_make_event("text_delta", text="ok"),
+        )
+        message_stop = _make_event(
+            "message_stop",
+            message=_make_event(
+                "message",
+                stop_reason="end_turn",
+                usage=_make_event("usage", input_tokens=1, output_tokens=1),
+            ),
+        )
+
+        fake_messages_client = MagicMock()
+        fake_messages_client.stream = MagicMock(
+            return_value=_FakeAnthropicStream([text_block, message_stop])
+        )
+        fake_client = MagicMock()
+        fake_client.messages = fake_messages_client
+
+        # Patch AsyncAnthropic at module level so AnthropicProvider's __init__
+        # picks up the mock. The patcher is started but not explicitly stopped
+        # — each contract test instantiates a fresh test class, and the
+        # provider is only used within the test scope.
+        patcher = patch(
+            "meta_harney.providers.anthropic.AsyncAnthropic",
+            return_value=fake_client,
+        )
+        patcher.start()
+
+        return AnthropicProvider(api_key="test-contract")
