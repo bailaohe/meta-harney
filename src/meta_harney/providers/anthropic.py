@@ -34,6 +34,7 @@ from meta_harney.providers.base import (
     ProviderStreamDone,
     ProviderStreamEvent,
     ProviderTextDelta,
+    ProviderThinkingBlock,
     ProviderThinkingDelta,
     ProviderToolCall,
     ToolSpec,
@@ -187,6 +188,8 @@ class AnthropicProvider:
 
         # Per-tool-use streaming state: block_index → {"id":..., "name":..., "json_chunks":[...]}
         tool_use_buffer: dict[int, dict[str, Any]] = {}
+        # Per-thinking-block state: block_index → {"text_chunks":[], "signature_chunks":[]}
+        thinking_buffer: dict[int, dict[str, list[str]]] = {}
 
         try:
             async with client.messages.stream(**kwargs) as stream_:
@@ -195,11 +198,17 @@ class AnthropicProvider:
 
                     if etype == "content_block_start":
                         block = event.content_block  # type: ignore[union-attr]
-                        if getattr(block, "type", None) == "tool_use":
+                        block_type = getattr(block, "type", None)
+                        if block_type == "tool_use":
                             tool_use_buffer[event.index] = {  # type: ignore[union-attr]
                                 "id": block.id,  # type: ignore[union-attr]
                                 "name": block.name,  # type: ignore[union-attr]
                                 "json_chunks": [],
+                            }
+                        elif block_type == "thinking":
+                            thinking_buffer[event.index] = {  # type: ignore[union-attr]
+                                "text_chunks": [],
+                                "signature_chunks": [],
                             }
 
                     elif etype == "content_block_delta":
@@ -208,7 +217,17 @@ class AnthropicProvider:
                         if dtype == "text_delta":
                             yield ProviderTextDelta(text=delta.text)  # type: ignore[union-attr]
                         elif dtype == "thinking_delta":
-                            yield ProviderThinkingDelta(text=getattr(delta, "thinking", ""))
+                            thinking_text = getattr(delta, "thinking", "")
+                            yield ProviderThinkingDelta(text=thinking_text)
+                            idx = event.index  # type: ignore[union-attr]
+                            if idx in thinking_buffer:
+                                thinking_buffer[idx]["text_chunks"].append(thinking_text)
+                        elif dtype == "signature_delta":
+                            idx = event.index  # type: ignore[union-attr]
+                            if idx in thinking_buffer:
+                                thinking_buffer[idx]["signature_chunks"].append(
+                                    getattr(delta, "signature", "")
+                                )
                         elif dtype == "input_json_delta":
                             idx = event.index  # type: ignore[union-attr]
                             if idx in tool_use_buffer:
@@ -227,6 +246,12 @@ class AnthropicProvider:
                                 invocation_id=buf["id"],
                                 name=buf["name"],
                                 args=parsed_args,
+                            )
+                        elif idx in thinking_buffer:
+                            tbuf = thinking_buffer.pop(idx)
+                            yield ProviderThinkingBlock(
+                                text="".join(tbuf["text_chunks"]),
+                                signature="".join(tbuf["signature_chunks"]),
                             )
 
                     elif etype == "message_stop":

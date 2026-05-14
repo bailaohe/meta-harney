@@ -719,3 +719,107 @@ async def test_anthropic_redacted_thinking_silently_skipped() -> None:
     assert not any(isinstance(e, ProviderThinkingDelta) for e in collected)
     # Stream completes normally
     assert any(isinstance(e, ProviderStreamDone) for e in collected)
+
+
+async def test_anthropic_thinking_block_emit_with_signature_accumulation() -> None:
+    """Provider buffers thinking_delta + signature_delta and emits one
+    ProviderThinkingBlock at content_block_stop."""
+    from unittest.mock import MagicMock, patch
+
+    from meta_harney.abstractions._types import Message, TextBlock
+    from meta_harney.providers.anthropic import AnthropicProvider
+    from meta_harney.providers.base import (
+        ProviderCallConfig,
+        ProviderThinkingBlock,
+        ProviderThinkingDelta,
+    )
+
+    cb_start = MagicMock()
+    cb_start.type = "content_block_start"
+    cb_start.index = 0
+    cb_start.content_block = MagicMock()
+    cb_start.content_block.type = "thinking"
+
+    text_delta_1 = MagicMock()
+    text_delta_1.type = "content_block_delta"
+    text_delta_1.index = 0
+    text_delta_1.delta = MagicMock()
+    text_delta_1.delta.type = "thinking_delta"
+    text_delta_1.delta.thinking = "let me "
+
+    text_delta_2 = MagicMock()
+    text_delta_2.type = "content_block_delta"
+    text_delta_2.index = 0
+    text_delta_2.delta = MagicMock()
+    text_delta_2.delta.type = "thinking_delta"
+    text_delta_2.delta.thinking = "think..."
+
+    sig_delta_1 = MagicMock()
+    sig_delta_1.type = "content_block_delta"
+    sig_delta_1.index = 0
+    sig_delta_1.delta = MagicMock()
+    sig_delta_1.delta.type = "signature_delta"
+    sig_delta_1.delta.signature = "sig-pa"
+
+    sig_delta_2 = MagicMock()
+    sig_delta_2.type = "content_block_delta"
+    sig_delta_2.index = 0
+    sig_delta_2.delta = MagicMock()
+    sig_delta_2.delta.type = "signature_delta"
+    sig_delta_2.delta.signature = "rt2"
+
+    cb_stop = MagicMock()
+    cb_stop.type = "content_block_stop"
+    cb_stop.index = 0
+
+    msg_stop = MagicMock()
+    msg_stop.type = "message_stop"
+    msg_stop.message = MagicMock()
+    msg_stop.message.stop_reason = "end_turn"
+    msg_stop.message.usage = None
+
+    events: list[object] = [
+        cb_start, text_delta_1, text_delta_2, sig_delta_1, sig_delta_2, cb_stop, msg_stop,
+    ]
+
+    class _FakeStreamCM:
+        def __init__(self, evs: list[object]) -> None:
+            self._evs = evs
+
+        async def __aenter__(self) -> _FakeStreamCM:
+            return self
+
+        async def __aexit__(self, *_a: object) -> None:
+            return None
+
+        def __aiter__(self) -> _FakeStreamCM:
+            return self
+
+        async def __anext__(self) -> object:
+            if not self._evs:
+                raise StopAsyncIteration
+            return self._evs.pop(0)
+
+    fake_client = MagicMock()
+    fake_client.messages.stream = lambda **_kw: _FakeStreamCM(events)
+
+    with patch("meta_harney.providers.anthropic.AsyncAnthropic", return_value=fake_client):
+        provider = AnthropicProvider(api_key="test", thinking_budget=4096)
+        collected: list[ProviderStreamEvent] = []
+        async for ev in provider.stream(
+            messages=[Message(role="user", content=[TextBlock(text="hi")])],
+            system_prompt="",
+            tools=[],
+            config=ProviderCallConfig(model="claude-sonnet-4-5"),
+        ):
+            collected.append(ev)
+
+    # Live stream: 2 ProviderThinkingDelta (unchanged Phase 6 behavior)
+    deltas = [e for e in collected if isinstance(e, ProviderThinkingDelta)]
+    assert [d.text for d in deltas] == ["let me ", "think..."]
+
+    # Persistence: exactly 1 ProviderThinkingBlock with concatenated text + signature
+    blocks = [e for e in collected if isinstance(e, ProviderThinkingBlock)]
+    assert len(blocks) == 1
+    assert blocks[0].text == "let me think..."
+    assert blocks[0].signature == "sig-part2"
