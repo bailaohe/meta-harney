@@ -31,6 +31,7 @@ from meta_harney.errors import (
 )
 from meta_harney.providers.base import (
     ProviderCallConfig,
+    ProviderRedactedThinking,
     ProviderStreamDone,
     ProviderStreamEvent,
     ProviderTextDelta,
@@ -210,6 +211,10 @@ class AnthropicProvider:
                                 "text_chunks": [],
                                 "signature_chunks": [],
                             }
+                        elif block_type == "redacted_thinking":
+                            yield ProviderRedactedThinking(
+                                data=getattr(block, "data", "")
+                            )
 
                     elif etype == "content_block_delta":
                         delta = event.delta  # type: ignore[union-attr]

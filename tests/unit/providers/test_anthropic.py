@@ -654,13 +654,14 @@ async def test_anthropic_thinking_delta_emits_provider_thinking_delta() -> None:
 
 
 async def test_anthropic_redacted_thinking_silently_skipped() -> None:
-    """redacted_thinking content block → no event, no error."""
+    """redacted_thinking content block with no data field → silently handled."""
     from unittest.mock import MagicMock, patch
 
     from meta_harney.abstractions._types import Message, TextBlock
     from meta_harney.providers.anthropic import AnthropicProvider
     from meta_harney.providers.base import (
         ProviderCallConfig,
+        ProviderRedactedThinking,
         ProviderStreamDone,
         ProviderThinkingDelta,
     )
@@ -670,6 +671,7 @@ async def test_anthropic_redacted_thinking_silently_skipped() -> None:
     cb_start.index = 0
     cb_start.content_block = MagicMock()
     cb_start.content_block.type = "redacted_thinking"
+    cb_start.content_block.data = ""  # Empty data field
 
     cb_stop = MagicMock()
     cb_stop.type = "content_block_stop"
@@ -715,6 +717,10 @@ async def test_anthropic_redacted_thinking_silently_skipped() -> None:
         ):
             collected.append(ev)
 
+    # Phase 7: ProviderRedactedThinking is now emitted (not silently skipped)
+    redacted = [e for e in collected if isinstance(e, ProviderRedactedThinking)]
+    assert len(redacted) == 1
+    assert redacted[0].data == ""
     # No ProviderThinkingDelta yielded
     assert not any(isinstance(e, ProviderThinkingDelta) for e in collected)
     # Stream completes normally
@@ -823,3 +829,71 @@ async def test_anthropic_thinking_block_emit_with_signature_accumulation() -> No
     assert len(blocks) == 1
     assert blocks[0].text == "let me think..."
     assert blocks[0].signature == "sig-part2"
+
+
+async def test_anthropic_redacted_thinking_emits_provider_event() -> None:
+    """content_block_start with redacted_thinking → ProviderRedactedThinking immediately."""
+    from unittest.mock import MagicMock, patch
+
+    from meta_harney.abstractions._types import Message, TextBlock
+    from meta_harney.providers.anthropic import AnthropicProvider
+    from meta_harney.providers.base import (
+        ProviderCallConfig,
+        ProviderRedactedThinking,
+        ProviderStreamEvent,  # noqa: F401
+    )
+
+    cb_start = MagicMock()
+    cb_start.type = "content_block_start"
+    cb_start.index = 0
+    cb_start.content_block = MagicMock()
+    cb_start.content_block.type = "redacted_thinking"
+    cb_start.content_block.data = "opaque-blob-xyz"
+
+    cb_stop = MagicMock()
+    cb_stop.type = "content_block_stop"
+    cb_stop.index = 0
+
+    msg_stop = MagicMock()
+    msg_stop.type = "message_stop"
+    msg_stop.message = MagicMock()
+    msg_stop.message.stop_reason = "end_turn"
+    msg_stop.message.usage = None
+
+    events: list[object] = [cb_start, cb_stop, msg_stop]
+
+    class _FakeStreamCM:
+        def __init__(self, evs: list[object]) -> None:
+            self._evs = evs
+
+        async def __aenter__(self) -> _FakeStreamCM:
+            return self
+
+        async def __aexit__(self, *_a: object) -> None:
+            return None
+
+        def __aiter__(self) -> _FakeStreamCM:
+            return self
+
+        async def __anext__(self) -> object:
+            if not self._evs:
+                raise StopAsyncIteration
+            return self._evs.pop(0)
+
+    fake_client = MagicMock()
+    fake_client.messages.stream = lambda **_kw: _FakeStreamCM(events)
+
+    with patch("meta_harney.providers.anthropic.AsyncAnthropic", return_value=fake_client):
+        provider = AnthropicProvider(api_key="test", thinking_budget=4096)
+        collected: list[ProviderStreamEvent] = []
+        async for ev in provider.stream(
+            messages=[Message(role="user", content=[TextBlock(text="hi")])],
+            system_prompt="",
+            tools=[],
+            config=ProviderCallConfig(model="claude-sonnet-4-5"),
+        ):
+            collected.append(ev)
+
+    redacted = [e for e in collected if isinstance(e, ProviderRedactedThinking)]
+    assert len(redacted) == 1
+    assert redacted[0].data == "opaque-blob-xyz"
