@@ -71,6 +71,26 @@ class ProviderThinkingDelta(_ProviderStreamEventBase):
     text: str
 
 
+class ProviderThinkingBlock(_ProviderStreamEventBase):
+    """Complete thinking content block emitted at content_block_stop.
+
+    Engine appends a ThinkingBlock to assistant message content. Distinct
+    from ProviderThinkingDelta (which is the live-stream variant emitted
+    incrementally and never persisted).
+    """
+
+    type: Literal["thinking_block"] = "thinking_block"
+    text: str
+    signature: str
+
+
+class ProviderRedactedThinking(_ProviderStreamEventBase):
+    """Opaque redacted-thinking block from Anthropic."""
+
+    type: Literal["redacted_thinking"] = "redacted_thinking"
+    data: str
+
+
 class ProviderStreamDone(_ProviderStreamEventBase):
     """Terminal event for a single LLM round."""
 
@@ -81,7 +101,12 @@ class ProviderStreamDone(_ProviderStreamEventBase):
 
 
 ProviderStreamEvent = (
-    ProviderTextDelta | ProviderToolCall | ProviderThinkingDelta | ProviderStreamDone
+    ProviderTextDelta
+    | ProviderToolCall
+    | ProviderThinkingDelta
+    | ProviderThinkingBlock
+    | ProviderRedactedThinking
+    | ProviderStreamDone
 )
 
 

@@ -84,3 +84,33 @@ async def test_protocol_duck_typing() -> None:
     assert len(events) == 2
     assert events[0].type == "text_delta"
     assert events[1].type == "stream_done"
+
+
+def test_provider_thinking_block_construction() -> None:
+    from meta_harney.providers.base import ProviderStreamEvent, ProviderThinkingBlock  # noqa: F401
+
+    ev = ProviderThinkingBlock(text="reasoning", signature="sig")
+    assert ev.text == "reasoning"
+    assert ev.signature == "sig"
+    assert ev.type == "thinking_block"
+
+    def accepts(_: ProviderStreamEvent) -> None:
+        pass
+
+    accepts(ev)
+
+
+def test_provider_redacted_thinking_construction() -> None:
+    from meta_harney.providers.base import (  # noqa: F401
+        ProviderRedactedThinking,
+        ProviderStreamEvent,
+    )
+
+    ev = ProviderRedactedThinking(data="opaque")
+    assert ev.data == "opaque"
+    assert ev.type == "redacted_thinking"
+
+    def accepts(_: ProviderStreamEvent) -> None:
+        pass
+
+    accepts(ev)
