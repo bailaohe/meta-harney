@@ -19,9 +19,13 @@ dev = [
     "mypy>=1.10",
     "ruff>=0.5",
     "anthropic>=0.40",
+    "openai>=1.50",
 ]
 anthropic = [
     "anthropic>=0.40",
+]
+openai = [
+    "openai>=1.50",
 ]
 
 [build-system]
