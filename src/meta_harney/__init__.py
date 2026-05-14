@@ -1,8 +1,11 @@
 """meta_harney — domain-agnostic agent runtime SDK.
 
-Phase 9a status: Provider Catalog.
-- ProviderSpec + BUILT_IN_PROVIDERS for 9 known providers
-  (anthropic, openai, moonshot, deepseek, gemini, minimax, nvidia,
+Phase 10 status: Bridge (v0.1.0).
+- meta_harney.bridge — JSON-RPC 2.0 server exposing AgentRuntime over stdio
+  (BridgeServer, NewlineFraming/ContentLengthFraming, BridgePermissionResolver,
+  BridgeTraceSink)
+- Provider Catalog (Phase 9a): ProviderSpec + BUILT_IN_PROVIDERS for 9 known
+  providers (anthropic, openai, moonshot, deepseek, gemini, minimax, nvidia,
   dashscope, modelscope)
 - provider_from_spec() factory and register_provider() extension hook
 - Anthropic extended-thinking full mode (Phase 7)
@@ -42,6 +45,13 @@ from meta_harney.abstractions import (
     ToolResultBlock,
     TraceEvent,
     TraceSink,
+)
+from meta_harney.bridge import (
+    BridgePermissionResolver,
+    BridgeServer,
+    BridgeTraceSink,
+    ContentLengthFraming,
+    NewlineFraming,
 )
 from meta_harney.builtin.multi_agent.in_process import InProcessMultiAgentBackend
 from meta_harney.engine.config import RuntimeConfig, tool_to_spec
@@ -84,7 +94,7 @@ from meta_harney.testing import (
     runtime_for_testing,
 )
 
-__version__ = "0.0.8"
+__version__ = "0.1.0"
 
 __all__ = [
     # provider catalog
@@ -101,10 +111,15 @@ __all__ = [
     "BaseTask",
     # tool
     "BaseTool",
+    # bridge (JSON-RPC over stdio)
+    "BridgePermissionResolver",
+    "BridgeServer",
+    "BridgeTraceSink",
     # compaction
     "CompactionStrategy",
     # data contracts
     "ContentBlock",
+    "ContentLengthFraming",
     # testing
     "FakeLLMProvider",
     "FakeRound",
@@ -122,6 +137,7 @@ __all__ = [
     # errors
     "MetaHarneyError",
     "MultiAgentBackend",
+    "NewlineFraming",
     # openai provider
     "OpenAIProvider",
     # permission

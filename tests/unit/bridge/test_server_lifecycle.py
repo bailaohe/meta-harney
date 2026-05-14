@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any, cast
 
 import pytest
 
@@ -15,7 +16,7 @@ class _FakeRuntime:
     """Bare-minimum stand-in for AgentRuntime."""
 
 
-async def _drive_one(server: BridgeServer, request: dict) -> dict:
+async def _drive_one(server: BridgeServer, request: dict[str, Any]) -> dict[str, Any]:
     """Feed one request through the server, return parsed response."""
     reader = asyncio.StreamReader()
     payload = json.dumps(request).encode() + b"\n"
@@ -40,7 +41,7 @@ async def _drive_one(server: BridgeServer, request: dict) -> dict:
     await server.serve(reader, _W())  # type: ignore[arg-type]
     lines = [ln for ln in b"".join(write_buf).split(b"\n") if ln]
     assert len(lines) == 1
-    return json.loads(lines[0])
+    return cast("dict[str, Any]", json.loads(lines[0]))
 
 
 @pytest.mark.asyncio
@@ -71,9 +72,7 @@ async def test_unknown_method_returns_method_not_found() -> None:
         framing=NewlineFraming(),
         server_info={"name": "x", "version": "0"},
     )
-    resp = await _drive_one(
-        server, {"jsonrpc": "2.0", "id": 2, "method": "totally_made_up"}
-    )
+    resp = await _drive_one(server, {"jsonrpc": "2.0", "id": 2, "method": "totally_made_up"})
     assert resp["error"]["code"] == -32601
 
 
@@ -86,8 +85,7 @@ async def test_shutdown_then_exit_terminates_loop() -> None:
     )
     reader = asyncio.StreamReader()
     reader.feed_data(
-        b'{"jsonrpc":"2.0","id":1,"method":"shutdown"}\n'
-        b'{"jsonrpc":"2.0","method":"exit"}\n'
+        b'{"jsonrpc":"2.0","id":1,"method":"shutdown"}\n{"jsonrpc":"2.0","method":"exit"}\n'
     )
     reader.feed_eof()
 

@@ -101,6 +101,33 @@ result = await rt.invoke(session.id, "hi")
 
 See [`docs/testing.md`](docs/testing.md) for the full testing API.
 
+## Bridge — drive AgentRuntime from another process
+
+`meta_harney.bridge` exposes the runtime as a JSON-RPC 2.0 server over stdio,
+so a non-Python client (or any out-of-process orchestrator) can drive sessions,
+stream events, gate permissions, and subscribe to telemetry.
+
+```python
+import asyncio
+from meta_harney import AgentRuntime
+from meta_harney.bridge import BridgeServer, NewlineFraming
+
+runtime: AgentRuntime = build_your_runtime()  # tools, permissions, sessions wired by you
+server = BridgeServer(
+    runtime=runtime,
+    framing=NewlineFraming(),
+    server_info={"name": "my-bridge", "version": "0.1.0"},
+)
+asyncio.run(server.serve_stdio())
+```
+
+JSON-RPC 2.0 over stdio. Methods: `initialize`, `shutdown`, `exit`,
+`session.create` / `session.list` / `session.load`, `session.send_message`
+(with `stream/event` notifications), `session.cancel`, `$/cancelRequest`,
+`tools.list`, `permission/request` (server to client), `telemetry/subscribe`,
+`telemetry/event`. Two framings supported: `NewlineFraming` (newline-delimited
+JSON, default) and `ContentLengthFraming` (LSP-style headers).
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — system overview
@@ -118,6 +145,7 @@ See [`docs/testing.md`](docs/testing.md) for the full testing API.
 | 3: AgentRuntime + multi-agent | shipped |
 | 4: Anthropic provider + testing module | shipped (v0.0.4) |
 | 5: OpenAI provider + docs | shipped (v0.0.5) |
+| 10: Bridge (JSON-RPC over stdio) | shipped (v0.1.0) |
 
 ## License
 

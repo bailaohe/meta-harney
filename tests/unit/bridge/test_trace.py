@@ -62,9 +62,7 @@ async def test_sink_handles_send_errors_silently() -> None:
 
     sink = BridgeTraceSink(send_notification=boom)
     sink.set_enabled(True)
-    ev = TraceEvent(
-        ts=datetime.now(timezone.utc), session_id="s", kind="x", span_id="sp"
-    )
+    ev = TraceEvent(ts=datetime.now(timezone.utc), session_id="s", kind="x", span_id="sp")
     # Must not raise — observability shouldn't kill the engine
     await sink.emit(ev)
 
@@ -72,6 +70,7 @@ async def test_sink_handles_send_errors_silently() -> None:
 @pytest.mark.asyncio
 async def test_sink_flush_is_noop() -> None:
     """TraceSink protocol requires `flush`; BridgeTraceSink has nothing to drain."""
+
     async def send_note(method: str, params: dict[str, Any]) -> None:
         return None
 

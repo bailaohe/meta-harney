@@ -34,9 +34,7 @@ class BridgePermissionResolver:
         self._send_request = send_request
         self._always_allow: set[str] = set()
 
-    async def resolve(
-        self, invocation: ToolInvocation, session_id: str
-    ) -> PermissionDecision:
+    async def resolve(self, invocation: ToolInvocation, session_id: str) -> PermissionDecision:
         if invocation.name in self._always_allow:
             return PermissionDecision(verdict="allow")
 

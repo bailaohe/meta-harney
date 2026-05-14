@@ -70,9 +70,7 @@ class BridgeServer:
         # by the request id we generate; negative-counting so we can't collide
         # with the client's positive ids on the same connection.
         self._pending: dict[Any, asyncio.Future[Any]] = {}
-        self._outbound_id_counter: Callable[[], int] = itertools.count(
-            start=-1, step=-1
-        ).__next__
+        self._outbound_id_counter: Callable[[], int] = itertools.count(start=-1, step=-1).__next__
         # Optional BridgeTraceSink whose subscription bit is toggled by
         # `telemetry/subscribe`. The host typically wires the SAME sink into
         # the runtime so events flow without further coupling.
@@ -282,9 +280,7 @@ class BridgeServer:
             logger.debug("dropping response for unknown/completed id: %r", msg.id)
             return
         if msg.error is not None:
-            fut.set_exception(
-                RuntimeError(f"client error {msg.error.code}: {msg.error.message}")
-            )
+            fut.set_exception(RuntimeError(f"client error {msg.error.code}: {msg.error.message}"))
         else:
             fut.set_result(msg.result)
 
@@ -454,11 +450,7 @@ class BridgeServer:
             for attr in ("input_schema", "args_schema", "schema"):
                 v = getattr(tool, attr, None)
                 if v is not None:
-                    schema = (
-                        v.model_json_schema()
-                        if hasattr(v, "model_json_schema")
-                        else v
-                    )
+                    schema = v.model_json_schema() if hasattr(v, "model_json_schema") else v
                     break
             out.append(
                 {

@@ -90,9 +90,7 @@ async def test_session_list_returns_summaries() -> None:
             messages=[Message(role="user", content=[TextBlock(text="hi")])],
         )
     )
-    resps = await _drive(
-        server, [{"jsonrpc": "2.0", "id": 1, "method": "session.list"}]
-    )
+    resps = await _drive(server, [{"jsonrpc": "2.0", "id": 1, "method": "session.list"}])
     summaries = resps[0]["result"]
     ids = sorted(s["id"] for s in summaries)
     assert ids == ["a", "b"]
