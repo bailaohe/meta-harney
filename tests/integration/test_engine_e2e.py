@@ -936,3 +936,65 @@ async def test_thinking_delta_passthrough_and_not_in_history() -> None:
     assistant_msgs = [m for m in refreshed.messages if m.role == "assistant"]
     assert len(assistant_msgs) == 1
     assert "Final answer." in assistant_msgs[0].content[0].text  # type: ignore[union-attr]
+
+
+async def test_tool_error_recovery_e2e() -> None:
+    """Tool exception → ToolResult(success=False) → LLM recovers in next round.
+
+    Spec §8.4 #2: agent calls a tool that raises; engine catches and feeds
+    error back to LLM; LLM apologizes / gives a recovery response.
+    """
+    from meta_harney.testing import FakeRound, runtime_for_testing
+
+    class _QueryInput(BaseModel):
+        q: str
+
+    class FlakyDBTool(BaseTool):
+        name: ClassVar[str] = "query_db"
+        description: ClassVar[str] = "Query the database."
+        input_schema: ClassVar[type[BaseModel]] = _QueryInput
+
+        async def execute(
+            self, inv: ToolInvocation, ctx: ToolContext
+        ) -> ToolResult:
+            raise RuntimeError("DB unreachable")
+
+    rt = runtime_for_testing(
+        scripted_rounds=[
+            # Round 1: assistant calls the tool
+            FakeRound(
+                tool_calls=[
+                    ProviderToolCall(
+                        invocation_id="t1",
+                        name="query_db",
+                        args={"q": "SELECT 1"},
+                    ),
+                ],
+                stop_reason="tool_use",
+            ),
+            # Round 2: assistant sees the error and recovers
+            FakeRound(
+                text="DB connection failed, please retry later.",
+                stop_reason="end_turn",
+            ),
+        ],
+        tools={"query_db": FlakyDBTool()},
+    )
+
+    session = await rt.create_session()
+    final = await rt.invoke(session.id, "Run SELECT 1")
+
+    # Assistant's final message contains the recovery text
+    assert "retry later" in final.content[0].text  # type: ignore[union-attr]
+
+    # session.messages role sequence: user, assistant(tool_call), tool(error), assistant(recovery)
+    refreshed = await rt._session_store.load(session.id)
+    assert refreshed is not None
+    roles = [m.role for m in refreshed.messages]
+    assert roles == ["user", "assistant", "tool", "assistant"]
+
+    # The tool result block records the error
+    tool_msg = refreshed.messages[2]
+    tool_block = tool_msg.content[0]
+    assert getattr(tool_block, "success", True) is False
+    assert "DB unreachable" in (getattr(tool_block, "error", "") or "")
