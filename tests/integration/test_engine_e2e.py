@@ -14,6 +14,7 @@ from meta_harney.abstractions._types import Message, TextBlock
 from meta_harney.abstractions.hook import BaseHook, HookDecision, HookEvent, HookEventKind
 from meta_harney.abstractions.multi_agent import AgentSpec as _AgentSpec
 from meta_harney.abstractions.session import Session
+from meta_harney.abstractions.task import TaskState
 from meta_harney.abstractions.tool import BaseTool, ToolContext, ToolInvocation, ToolResult
 from meta_harney.builtin.compaction.summarization import SummarizationCompactor
 from meta_harney.builtin.multi_agent.in_process import InProcessMultiAgentBackend
@@ -822,3 +823,56 @@ async def test_e2e_parent_spawns_blocking_child() -> None:
     children = [s for s in all_sessions if s.parent_session_id == session.id]
     assert len(children) == 1
     assert children[0].tenant_id == "acme"  # tenant inherited
+
+
+async def test_e2e_detached_child_status_then_join() -> None:
+    """Parent spawns a detached child, polls status, then joins."""
+    class _SlowChildProvider:
+        """Sleeps briefly, then emits one text round."""
+        async def stream(
+            self,
+            messages: list[Message],
+            system_prompt: str,
+            tools: list[_TS],
+            config: _PCC,
+        ) -> AsyncGenerator[_PSE, None]:
+            await asyncio.sleep(0.3)
+            yield ProviderTextDelta(text="slow child done")
+            yield ProviderStreamDone(stop_reason="end_turn")
+
+    store = MemorySessionStore()
+
+    backend = InProcessMultiAgentBackend(
+        provider=_SlowChildProvider(),  # type: ignore[arg-type]
+        permission_resolver=AllowAllPermissionResolver(),
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="child"),
+        all_tools={},
+        hooks=[],
+    )
+
+    parent_id = "parent-detach-e2e"
+    await store.save(Session(id=parent_id, created_at=datetime.now(timezone.utc)))
+
+    spec = _AgentSpec(name="bg", instructions="background helper", allowed_tools=[])
+    handle = await backend.spawn(
+        spec=spec,
+        initial_message="run",
+        parent_session_id=parent_id,
+        mode="detached",
+    )
+
+    # Status check immediately after spawn (still running)
+    await asyncio.sleep(0.05)
+    status = await backend.status(handle.child_session_id)
+    assert status == TaskState.RUNNING
+
+    # Join awaits completion
+    result = await backend.join(handle.child_session_id)
+    assert result.success
+    assert "slow child done" in str(result.output)
+
+    # Final status SUCCEEDED
+    final_status = await backend.status(handle.child_session_id)
+    assert final_status == TaskState.SUCCEEDED
