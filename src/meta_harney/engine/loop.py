@@ -26,6 +26,7 @@ from meta_harney.engine.stream_events import (
     IterationCompleted,
     StreamEvent,
     TextDelta,
+    ThinkingDelta,
     ToolCallCompleted,
     ToolCallStarted,
     TurnCompleted,
@@ -42,6 +43,7 @@ from meta_harney.providers.base import (
     ProviderStreamDone,
     ProviderStreamEvent,
     ProviderTextDelta,
+    ProviderThinkingDelta,
     ProviderToolCall,
     ToolSpec,
 )
@@ -198,6 +200,11 @@ async def run_turn(
                 if isinstance(ev, ProviderTextDelta):
                     text_chunks.append(ev.text)
                     yield TextDelta(text=ev.text)
+                elif isinstance(ev, ProviderThinkingDelta):
+                    # Passthrough: stream the thinking to the consumer, but do
+                    # NOT append to text_chunks or assistant_blocks, and do not
+                    # persist to session.messages.
+                    yield ThinkingDelta(text=ev.text)
                 elif isinstance(ev, ProviderToolCall):
                     tool_calls.append(ev)
                 elif isinstance(ev, ProviderStreamDone):

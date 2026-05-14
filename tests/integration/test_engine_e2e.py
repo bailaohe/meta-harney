@@ -895,3 +895,44 @@ async def test_e2e_detached_child_status_then_join() -> None:
     # Final status SUCCEEDED
     final_status = await backend.status(handle.child_session_id)
     assert final_status == TaskState.SUCCEEDED
+
+
+async def test_thinking_delta_passthrough_and_not_in_history() -> None:
+    """ThinkingDelta flows from provider → runtime stream; never enters session.messages."""
+    from meta_harney.engine.stream_events import ThinkingDelta
+    from meta_harney.testing import FakeRound, runtime_for_testing
+
+    rt = runtime_for_testing(
+        scripted_rounds=[
+            FakeRound(
+                thinking="reasoning step 1",
+                text="Final answer.",
+                stop_reason="end_turn",
+            ),
+        ],
+    )
+    session = await rt.create_session()
+
+    thinking_events: list[ThinkingDelta] = []
+    async for ev in rt.stream(session.id, "What's 2+2?"):
+        if isinstance(ev, ThinkingDelta):
+            thinking_events.append(ev)
+
+    # Stream consumer saw the ThinkingDelta
+    assert len(thinking_events) == 1
+    assert thinking_events[0].text == "reasoning step 1"
+
+    # But session.messages does NOT contain "reasoning step 1" anywhere
+    refreshed = await rt._session_store.load(session.id)
+    assert refreshed is not None
+    for msg in refreshed.messages:
+        for block in msg.content:
+            text = getattr(block, "text", "")
+            assert "reasoning step 1" not in text, (
+                f"thinking leaked into message {msg.role}: {text!r}"
+            )
+
+    # The assistant message should still contain "Final answer."
+    assistant_msgs = [m for m in refreshed.messages if m.role == "assistant"]
+    assert len(assistant_msgs) == 1
+    assert "Final answer." in assistant_msgs[0].content[0].text  # type: ignore[union-attr]
