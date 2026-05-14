@@ -33,7 +33,6 @@ from meta_harney.engine.tracing import emit_event, new_span_id
 from meta_harney.errors import SessionNotFoundError
 from meta_harney.providers.base import (
     LLMProvider,
-    ProviderCallConfig,
     ProviderStreamDone,
     ProviderTextDelta,
     ProviderToolCall,
@@ -146,7 +145,7 @@ async def run_turn(
                 messages=list(session.messages),
                 system_prompt=system_prompt,
                 tools=tool_specs,
-                config=ProviderCallConfig(model=config.model),
+                config=config.to_provider_call_config(),
             ):
                 if isinstance(ev, ProviderTextDelta):
                     text_chunks.append(ev.text)

@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from meta_harney.abstractions.tool import BaseTool, ToolContext, ToolInvocation, ToolResult
 from meta_harney.engine.config import RuntimeConfig, tool_to_spec
+from meta_harney.engine.retry import RetryConfig
 
 
 class _EchoInput(BaseModel):
@@ -77,3 +78,42 @@ def test_tool_to_spec_basic() -> None:
     assert spec.description == "Echoes input."
     assert "properties" in spec.input_schema
     assert "text" in spec.input_schema["properties"]
+
+
+
+def test_runtime_config_new_fields_defaults() -> None:
+    c = RuntimeConfig(model="x")
+    assert c.max_tokens is None
+    assert c.temperature is None
+    assert c.retry == RetryConfig()  # default retry config
+
+
+def test_runtime_config_custom_provider_params() -> None:
+    c = RuntimeConfig(
+        model="x",
+        max_tokens=4096,
+        temperature=0.7,
+    )
+    assert c.max_tokens == 4096
+    assert c.temperature == 0.7
+
+
+def test_runtime_config_custom_retry() -> None:
+    c = RuntimeConfig(
+        model="x",
+        retry=RetryConfig(max_attempts=5, initial_delay_s=0.5),
+    )
+    assert c.retry.max_attempts == 5
+    assert c.retry.initial_delay_s == 0.5
+
+
+def test_runtime_config_to_provider_call_config() -> None:
+    """Helper produces a ProviderCallConfig with all relevant fields."""
+    from meta_harney.providers.base import ProviderCallConfig
+
+    c = RuntimeConfig(model="x", max_tokens=1024, temperature=0.5)
+    pc = c.to_provider_call_config()
+    assert isinstance(pc, ProviderCallConfig)
+    assert pc.model == "x"
+    assert pc.max_tokens == 1024
+    assert pc.temperature == 0.5
