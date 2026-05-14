@@ -128,12 +128,44 @@ JSON-RPC 2.0 over stdio. Methods: `initialize`, `shutdown`, `exit`,
 `telemetry/event`. Two framings supported: `NewlineFraming` (newline-delimited
 JSON, default) and `ContentLengthFraming` (LSP-style headers).
 
+## TypeScript bridge client
+
+Want to drive the bridge from Node.js? Ship a TypeScript client lives in
+[`clients/typescript/`](clients/typescript/) (`@meta-harney/bridge-client`).
+It wraps the JSON-RPC protocol with a typed `BridgeClient` (initialize,
+session lifecycle, streaming `sendMessage`, permission handler,
+`telemetry/subscribe`, cancellation handles), two framings, and a
+`ChildProcessTransport` that spawns and supervises the bridge subprocess.
+
+```ts
+import { BridgeClient, ChildProcessTransport, NewlineFraming } from "@meta-harney/bridge-client";
+
+const transport = new ChildProcessTransport({
+  command: "oh",          // or any meta-harney BridgeServer entry point
+  args: ["--bridge"],
+  framing: new NewlineFraming(),
+});
+const client = new BridgeClient({ transport });
+await client.initialize({ clientInfo: { name: "my-app", version: "1.0.0" } });
+
+const session = await client.sessionCreate({ provider: "anthropic", model: "claude-sonnet-4-5" });
+const handle = client.sendMessage(session.id, "What's the capital of France?");
+for await (const ev of handle.events) {
+  if (ev.kind === "text-delta") process.stdout.write(ev.text);
+}
+await client.shutdown();
+```
+
+Reference implementation: [`oh-tui`](https://github.com/bailaohe/oh-tui) — an
+Ink TUI built on top of `@meta-harney/bridge-client`.
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — system overview
 - [`docs/abstractions.md`](docs/abstractions.md) — the 9 abstractions reference
 - [`docs/providers.md`](docs/providers.md) — provider setup + custom-provider guide
 - [`docs/testing.md`](docs/testing.md) — testing helpers
+- [`clients/typescript/`](clients/typescript/) — TS bridge client
 - [`docs/superpowers/specs/`](docs/superpowers/specs/) — original design specs
 
 ## Project status
@@ -146,6 +178,7 @@ JSON, default) and `ContentLengthFraming` (LSP-style headers).
 | 4: Anthropic provider + testing module | shipped (v0.0.4) |
 | 5: OpenAI provider + docs | shipped (v0.0.5) |
 | 10: Bridge (JSON-RPC over stdio) | shipped (v0.1.0) |
+| 11a: TypeScript bridge client | shipped (v0.2.0) |
 
 ## License
 
