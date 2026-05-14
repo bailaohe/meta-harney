@@ -348,7 +348,15 @@ async def run_turn(
             parent_span_id=turn_span,
             payload={"total_iterations": iteration},
         )
-        await trace_sink.flush()
+        try:
+            await trace_sink.flush()
+        except Exception as flush_exc:
+            import sys
+
+            print(
+                f"[meta_harney] trace sink flush failed: {type(flush_exc).__name__}: {flush_exc}",
+                file=sys.stderr,
+            )
 
         yield TurnCompleted(total_iterations=iteration)
 

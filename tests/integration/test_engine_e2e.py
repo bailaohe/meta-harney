@@ -493,3 +493,65 @@ async def test_cancellation_preserves_session() -> None:
     last_user = user_msgs[-1].content[0]
     assert isinstance(last_user, TextBlock)
     assert last_user.text == "hi"
+
+
+class _BrokenSink:
+    """Sink that raises on every emit/flush — verifies engine isolation."""
+
+    def __init__(self) -> None:
+        self.emit_calls = 0
+        self.flush_calls = 0
+
+    async def emit(self, event: object) -> None:
+        self.emit_calls += 1
+        raise RuntimeError(f"broken sink emit #{self.emit_calls}")
+
+    async def flush(self) -> None:
+        self.flush_calls += 1
+        raise RuntimeError("broken sink flush")
+
+
+async def test_trace_sink_failure_does_not_break_turn() -> None:
+    """Per spec §7.2 rule 2: observability MUST NOT kill business.
+
+    A TraceSink that raises on every call must not affect the engine's
+    ability to complete a turn end-to-end.
+    """
+    store = MemorySessionStore()
+    await _new_session(store)
+
+    provider = FakeLLMProvider(
+        rounds=[
+            FakeRound(text="ok despite broken sink", stop_reason="end_turn"),
+        ]
+    )
+
+    broken_sink = _BrokenSink()
+
+    events: list[StreamEvent] = []
+    async for ev in run_turn(
+        session_id="s1",
+        user_message=Message(role="user", content=[TextBlock(text="hi")]),
+        provider=provider,
+        prompt_builder=MinimalPromptBuilder(session_store=store),
+        permission_resolver=AllowAllPermissionResolver(),
+        tools={},
+        hooks=[],
+        session_store=store,
+        trace_sink=broken_sink,  # type: ignore[arg-type]
+        config=RuntimeConfig(model="x"),
+    ):
+        events.append(ev)
+
+    # Turn completed normally despite many trace failures
+    assert any(isinstance(e, TurnCompleted) for e in events)
+    text_events = [e for e in events if isinstance(e, TextDelta)]
+    assert any("ok despite broken sink" in e.text for e in text_events)
+
+    # Session was saved (the user message survived)
+    loaded = await store.load("s1")
+    assert loaded is not None
+    assert len(loaded.messages) == 2
+
+    # Sink was called multiple times (every emit call attempt was rejected)
+    assert broken_sink.emit_calls >= 5
