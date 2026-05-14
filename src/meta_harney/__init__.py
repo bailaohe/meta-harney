@@ -67,6 +67,7 @@ from meta_harney.providers.base import (
     ProviderToolCall,
     ToolSpec,
 )
+from meta_harney.providers.openai import OpenAIProvider
 from meta_harney.runtime import AgentRuntime
 from meta_harney.testing import (
     FakeLLMProvider,
@@ -110,6 +111,8 @@ __all__ = [
     # errors
     "MetaHarneyError",
     "MultiAgentBackend",
+    # openai provider
+    "OpenAIProvider",
     # permission
     "PermissionDecision",
     "PermissionResolver",
