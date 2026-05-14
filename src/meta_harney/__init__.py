@@ -1,14 +1,15 @@
 """meta_harney — domain-agnostic agent runtime SDK.
 
-Phase 4 status: AnthropicProvider (real LLM backend) + meta_harney.testing
-module added. Phase 3 polish items resolved (ChildNotFoundError symmetry,
-join-timeout auto-cancel, ToolCallStarted ordering).
+Phase 5 status: OpenAIProvider (second real LLM backend) added alongside
+AnthropicProvider. User-facing documentation shipped: README, architecture,
+abstractions, providers, and testing reference docs.
 
 Public surface:
 - AgentRuntime facade (create_session, invoke, stream)
 - LLMProvider Protocol + ProviderStreamEvent variants
 - FakeLLMProvider + runtime_for_testing for SDK consumers' tests
-- AnthropicProvider (optional 'anthropic' extra) — first real backend
+- AnthropicProvider (optional 'anthropic' extra)
+- OpenAIProvider (optional 'openai' extra)
 - InProcessMultiAgentBackend
 - 9 core abstractions + builtin defaults (Phase 1)
 - StreamEvent types, RetryConfig, RuntimeConfig (Phase 2-3)
@@ -75,7 +76,7 @@ from meta_harney.testing import (
     runtime_for_testing,
 )
 
-__version__ = "0.0.4"
+__version__ = "0.0.5"
 
 __all__ = [
     # runtime facade
