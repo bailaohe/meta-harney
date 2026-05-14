@@ -14,6 +14,7 @@ from meta_harney.abstractions._types import (
     ToolResultBlock,
 )
 from meta_harney.providers.base import (
+    LLMProvider,
     ProviderCallConfig,
     ProviderStreamDone,
     ProviderStreamEvent,
@@ -26,6 +27,7 @@ from meta_harney.providers.openai import (
     _convert_messages_to_openai,
     _convert_tools_to_openai,
 )
+from tests.contracts.llm_provider import LLMProviderContract
 
 
 class _FakeOpenAIStream:
@@ -490,3 +492,33 @@ async def test_openai_401_maps_to_non_retryable() -> None:
                 config=ProviderCallConfig(model="gpt-4"),
             ):
                 pass
+
+
+class TestOpenAIProviderContract(LLMProviderContract):
+    """OpenAIProvider passes the standard LLMProvider contract."""
+
+    @pytest.fixture(autouse=True)
+    def _stub_openai_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Replace AsyncOpenAI with a mock for the duration of each test."""
+
+        def _factory() -> MagicMock:
+            chunks = [
+                _make_chunk(text="ok"),
+                _make_chunk(finish_reason="stop"),
+                _make_chunk(usage=_make_usage(prompt_tokens=1, completion_tokens=1)),
+            ]
+            fake_completions = MagicMock()
+            fake_completions.create = AsyncMock(return_value=_FakeOpenAIStream(chunks))
+            fake_chat = MagicMock()
+            fake_chat.completions = fake_completions
+            fake_client = MagicMock()
+            fake_client.chat = fake_chat
+            return fake_client
+
+        monkeypatch.setattr(
+            "meta_harney.providers.openai.AsyncOpenAI",
+            lambda **kwargs: _factory(),
+        )
+
+    def make_provider(self) -> LLMProvider:
+        return OpenAIProvider(api_key="test-contract")
