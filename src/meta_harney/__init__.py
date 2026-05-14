@@ -25,11 +25,13 @@ from meta_harney.abstractions import (
     PermissionDecision,
     PermissionResolver,
     PromptBuilder,
+    RedactedThinkingBlock,
     Session,
     SessionStore,
     SpawnHandle,
     TaskState,
     TextBlock,
+    ThinkingBlock,
     ToolCallBlock,
     ToolContext,
     ToolInvocation,
@@ -56,9 +58,11 @@ from meta_harney.providers.anthropic import AnthropicProvider
 from meta_harney.providers.base import (
     LLMProvider,
     ProviderCallConfig,
+    ProviderRedactedThinking,
     ProviderStreamDone,
     ProviderStreamEvent,
     ProviderTextDelta,
+    ProviderThinkingBlock,
     ProviderThinkingDelta,
     ProviderToolCall,
     ToolSpec,
@@ -71,7 +75,7 @@ from meta_harney.testing import (
     runtime_for_testing,
 )
 
-__version__ = "0.0.6"
+__version__ = "0.0.7"
 
 __all__ = [
     # runtime facade
@@ -116,11 +120,15 @@ __all__ = [
     "PromptBuilder",
     # provider call config
     "ProviderCallConfig",
+    "ProviderRedactedThinking",
     "ProviderStreamDone",
     "ProviderStreamEvent",
     "ProviderTextDelta",
+    "ProviderThinkingBlock",
     "ProviderThinkingDelta",
     "ProviderToolCall",
+    # redacted thinking
+    "RedactedThinkingBlock",
     # retry
     "RetryConfig",
     # engine config
@@ -133,6 +141,7 @@ __all__ = [
     "TaskState",
     "TextBlock",
     "TextDelta",
+    "ThinkingBlock",
     "ThinkingDelta",
     "ToolCallBlock",
     "ToolCallCompleted",
