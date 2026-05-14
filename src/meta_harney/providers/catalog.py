@@ -141,7 +141,6 @@ def register_provider(
     """
     if not overwrite and spec.name in BUILT_IN_PROVIDERS:
         raise ValueError(
-            f"provider {spec.name!r} already registered "
-            f"(use overwrite=True to replace)"
+            f"provider {spec.name!r} already registered (use overwrite=True to replace)"
         )
     BUILT_IN_PROVIDERS[spec.name] = spec
