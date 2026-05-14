@@ -27,4 +27,11 @@ export { BridgeError, BridgeCancelled, BridgeDisconnected } from "./errors.js";
 export { ChildProcessTransport } from "./transport.js";
 export type { TransportOptions } from "./transport.js";
 
+export { BridgeClient } from "./client.js";
+export type {
+  BridgeClientOptions,
+  InitializeParams,
+  InitializeResult,
+} from "./client.js";
+
 export const VERSION = "0.1.0";
