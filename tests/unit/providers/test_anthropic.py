@@ -398,6 +398,41 @@ async def test_anthropic_401_maps_to_non_retryable() -> None:
                 pass
 
 
+def test_convert_tool_result_with_dict_output_serializes_json() -> None:
+    """Successful ToolResult with dict output uses JSON, not Python repr."""
+    msgs = [
+        Message(
+            role="tool",
+            content=[
+                ToolResultBlock(
+                    invocation_id="c1",
+                    success=True,
+                    output={"id": "C-001", "name": "Acme"},
+                ),
+            ],
+        ),
+    ]
+    converted, _ = _convert_messages_to_anthropic(msgs)
+    result_block = converted[0]["content"][0]
+    assert result_block["type"] == "tool_result"
+    # Must be JSON (double quotes), not Python repr (single quotes)
+    assert result_block["content"] == '{"id": "C-001", "name": "Acme"}'
+
+
+def test_convert_tool_result_with_none_output_empty_content() -> None:
+    """Successful ToolResult with output=None produces empty content, not 'None'."""
+    msgs = [
+        Message(
+            role="tool",
+            content=[
+                ToolResultBlock(invocation_id="c1", success=True, output=None),
+            ],
+        ),
+    ]
+    converted, _ = _convert_messages_to_anthropic(msgs)
+    assert converted[0]["content"][0]["content"] == ""
+
+
 class TestAnthropicProviderContract(LLMProviderContract):
     """AnthropicProvider passes the standard LLMProvider contract."""
 

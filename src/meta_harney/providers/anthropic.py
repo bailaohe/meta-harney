@@ -16,6 +16,7 @@ from typing import Any
 
 from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic
 
+from meta_harney.abstractions._serialize import _serialize_tool_output
 from meta_harney.abstractions._types import (
     ImageBlock,
     Message,
@@ -87,7 +88,7 @@ def _convert_messages_to_anthropic(
             result_block: dict[str, Any] = {
                 "type": "tool_result",
                 "tool_use_id": block.invocation_id,
-                "content": str(content),
+                "content": _serialize_tool_output(content),
             }
             if not block.success:
                 result_block["is_error"] = True
