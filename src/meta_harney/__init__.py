@@ -60,7 +60,7 @@ from meta_harney.providers.base import (
 )
 from meta_harney.runtime import AgentRuntime
 
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 
 __all__ = [
     # runtime facade
