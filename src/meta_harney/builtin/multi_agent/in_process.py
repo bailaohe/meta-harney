@@ -104,8 +104,17 @@ class InProcessMultiAgentBackend:
             self._results[child_id] = result
             return SpawnHandle(child_session_id=child_id, mode="blocking")
 
-        # detached — Task 9 implements this; for now, raise
-        raise NotImplementedError("detached mode lands in Task 9")
+        # detached
+        coro = self._run_child(
+            child_id=child_id,
+            initial_message=initial_message,
+            instructions=spec.instructions,
+            child_tools=child_tools,
+            child_config=child_config,
+        )
+        task = asyncio.create_task(coro)
+        self._tasks[child_id] = task
+        return SpawnHandle(child_session_id=child_id, mode="detached")
 
     async def _run_child(
         self,
@@ -154,10 +163,49 @@ class InProcessMultiAgentBackend:
         child_session_id: str,
         timeout: float | None = None,
     ) -> ToolResult:
-        raise NotImplementedError("Task 9")
+        # Already-completed blocking child?
+        if child_session_id in self._results:
+            return self._results[child_session_id]
+
+        task = self._tasks.get(child_session_id)
+        if task is None:
+            raise KeyError(f"no such child: {child_session_id!r}")
+
+        from meta_harney.errors import ChildTimeoutError
+
+        try:
+            if timeout is None:
+                result = await task
+            else:
+                result = await asyncio.wait_for(asyncio.shield(task), timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            raise ChildTimeoutError(
+                f"child {child_session_id!r} did not complete within {timeout}s"
+            ) from exc
+        self._results[child_session_id] = result
+        return result
 
     async def status(self, child_session_id: str) -> TaskState:
-        raise NotImplementedError("Task 9")
+        if child_session_id in self._results:
+            return TaskState.SUCCEEDED
+        task = self._tasks.get(child_session_id)
+        if task is None:
+            return TaskState.PENDING  # unknown child — treat as not yet started
+        if task.cancelled():
+            return TaskState.CANCELLED
+        if task.done():
+            if task.exception() is not None:
+                return TaskState.FAILED
+            return TaskState.SUCCEEDED
+        return TaskState.RUNNING
 
     async def cancel(self, child_session_id: str) -> None:
-        raise NotImplementedError("Task 9")
+        task = self._tasks.get(child_session_id)
+        if task is None or task.done():
+            return
+        task.cancel()
+        # Drain the cancellation
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass

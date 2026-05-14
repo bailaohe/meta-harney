@@ -1,6 +1,8 @@
 """Tests for InProcessMultiAgentBackend (Phase 3)."""
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from typing import ClassVar
 
@@ -10,6 +12,7 @@ from pydantic import BaseModel
 from meta_harney.abstractions._types import Message, TextBlock
 from meta_harney.abstractions.multi_agent import AgentSpec
 from meta_harney.abstractions.session import Session
+from meta_harney.abstractions.task import TaskState
 from meta_harney.abstractions.tool import BaseTool, ToolContext, ToolInvocation, ToolResult
 from meta_harney.builtin.multi_agent.child_prompt import _ChildPromptBuilder
 from meta_harney.builtin.multi_agent.in_process import InProcessMultiAgentBackend
@@ -17,6 +20,14 @@ from meta_harney.builtin.permission.allow_all import AllowAllPermissionResolver
 from meta_harney.builtin.session.memory_store import MemorySessionStore
 from meta_harney.builtin.trace.null_sink import NullSink
 from meta_harney.engine.config import RuntimeConfig
+from meta_harney.errors import ChildTimeoutError
+from meta_harney.providers.base import (
+    ProviderCallConfig,
+    ProviderStreamDone,
+    ProviderStreamEvent,
+    ProviderTextDelta,
+    ToolSpec,
+)
 from meta_harney.providers.fake import FakeLLMProvider, FakeRound
 
 
@@ -199,3 +210,197 @@ async def test_spawn_unknown_mode_raises() -> None:
             parent_session_id="parent-3",
             mode="bogus",  # type: ignore[arg-type]
         )
+
+
+async def test_spawn_detached_returns_handle_immediately() -> None:
+    """Detached spawn returns SpawnHandle without waiting for child."""
+    store = MemorySessionStore()
+    parent = Session(id="parent-d1", created_at=datetime.now(timezone.utc))
+    await store.save(parent)
+
+    provider = FakeLLMProvider(rounds=[FakeRound(text="result", stop_reason="end_turn")])
+    backend = InProcessMultiAgentBackend(
+        provider=provider,
+        permission_resolver=AllowAllPermissionResolver(),
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="fake"),
+        all_tools={},
+        hooks=[],
+    )
+
+    spec = AgentSpec(name="x", instructions="y", allowed_tools=[])
+    handle = await backend.spawn(
+        spec=spec,
+        initial_message="go",
+        parent_session_id="parent-d1",
+        mode="detached",
+    )
+    assert handle.mode == "detached"
+
+    # Join to await completion
+    result = await backend.join(handle.child_session_id)
+    assert result.success
+    assert "result" in str(result.output)
+
+
+async def test_status_for_completed_child() -> None:
+    store = MemorySessionStore()
+    parent = Session(id="parent-s1", created_at=datetime.now(timezone.utc))
+    await store.save(parent)
+
+    provider = FakeLLMProvider(rounds=[FakeRound(text="done", stop_reason="end_turn")])
+    backend = InProcessMultiAgentBackend(
+        provider=provider,
+        permission_resolver=AllowAllPermissionResolver(),
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="fake"),
+        all_tools={},
+        hooks=[],
+    )
+
+    handle = await backend.spawn(
+        spec=AgentSpec(name="x", instructions="y", allowed_tools=[]),
+        initial_message="go",
+        parent_session_id="parent-s1",
+        mode="detached",
+    )
+    # Await completion
+    await backend.join(handle.child_session_id)
+    s = await backend.status(handle.child_session_id)
+    assert s == TaskState.SUCCEEDED
+
+
+class _SlowProvider:
+    """Sleeps before emitting one text round."""
+
+    async def stream(
+        self,
+        messages: list[Message],
+        system_prompt: str,
+        tools: list[ToolSpec],
+        config: ProviderCallConfig,
+    ) -> AsyncGenerator[ProviderStreamEvent, None]:
+        await asyncio.sleep(0.5)
+        yield ProviderTextDelta(text="slow")
+        yield ProviderStreamDone(stop_reason="end_turn")
+
+
+async def test_status_for_running_child() -> None:
+    """While the child is still running, status is RUNNING."""
+    store = MemorySessionStore()
+    parent = Session(id="parent-r1", created_at=datetime.now(timezone.utc))
+    await store.save(parent)
+
+    backend = InProcessMultiAgentBackend(
+        provider=_SlowProvider(),  # type: ignore[arg-type]
+        permission_resolver=AllowAllPermissionResolver(),
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="fake"),
+        all_tools={},
+        hooks=[],
+    )
+
+    handle = await backend.spawn(
+        spec=AgentSpec(name="x", instructions="y", allowed_tools=[]),
+        initial_message="go",
+        parent_session_id="parent-r1",
+        mode="detached",
+    )
+    # Status before join (race-safe: provider sleeps 500ms)
+    await asyncio.sleep(0.05)
+    s = await backend.status(handle.child_session_id)
+    assert s == TaskState.RUNNING
+
+    # Then await
+    result = await backend.join(handle.child_session_id)
+    assert result.success
+
+
+class _BlockingProvider:
+    """Sleeps indefinitely — used to test cancellation."""
+
+    async def stream(
+        self,
+        messages: list[Message],
+        system_prompt: str,
+        tools: list[ToolSpec],
+        config: ProviderCallConfig,
+    ) -> AsyncGenerator[ProviderStreamEvent, None]:
+        await asyncio.sleep(10.0)
+        yield  # type: ignore[unreachable]
+
+
+async def test_cancel_detached_child() -> None:
+    """cancel() interrupts a running detached child task."""
+    store = MemorySessionStore()
+    parent = Session(id="parent-c1", created_at=datetime.now(timezone.utc))
+    await store.save(parent)
+
+    backend = InProcessMultiAgentBackend(
+        provider=_BlockingProvider(),  # type: ignore[arg-type]
+        permission_resolver=AllowAllPermissionResolver(),
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="fake"),
+        all_tools={},
+        hooks=[],
+    )
+
+    handle = await backend.spawn(
+        spec=AgentSpec(name="x", instructions="y", allowed_tools=[]),
+        initial_message="go",
+        parent_session_id="parent-c1",
+        mode="detached",
+    )
+    await asyncio.sleep(0.05)
+    await backend.cancel(handle.child_session_id)
+    s = await backend.status(handle.child_session_id)
+    assert s == TaskState.CANCELLED
+
+
+async def test_join_unknown_child_raises() -> None:
+    """Joining a child that was never spawned raises."""
+    store = MemorySessionStore()
+    backend = InProcessMultiAgentBackend(
+        provider=FakeLLMProvider(rounds=[]),
+        permission_resolver=AllowAllPermissionResolver(),
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="fake"),
+        all_tools={},
+        hooks=[],
+    )
+    with pytest.raises(KeyError, match="no such child"):
+        await backend.join("nonexistent-id")
+
+
+async def test_join_timeout_raises_child_timeout_error() -> None:
+    """join(timeout=...) raises ChildTimeoutError if exceeded."""
+    store = MemorySessionStore()
+    parent = Session(id="parent-t1", created_at=datetime.now(timezone.utc))
+    await store.save(parent)
+
+    backend = InProcessMultiAgentBackend(
+        provider=_BlockingProvider(),  # type: ignore[arg-type]
+        permission_resolver=AllowAllPermissionResolver(),
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="fake"),
+        all_tools={},
+        hooks=[],
+    )
+
+    handle = await backend.spawn(
+        spec=AgentSpec(name="x", instructions="y", allowed_tools=[]),
+        initial_message="go",
+        parent_session_id="parent-t1",
+        mode="detached",
+    )
+    with pytest.raises(ChildTimeoutError):
+        await backend.join(handle.child_session_id, timeout=0.1)
+
+    # Cleanup the still-running task
+    await backend.cancel(handle.child_session_id)
