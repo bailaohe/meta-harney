@@ -59,6 +59,18 @@ class ProviderToolCall(_ProviderStreamEventBase):
     args: dict[str, Any] = Field(default_factory=dict)
 
 
+class ProviderThinkingDelta(_ProviderStreamEventBase):
+    """Incremental extended-thinking text emitted by the LLM.
+
+    Anthropic emits these during extended-thinking content blocks. OpenAI
+    Chat Completions does not currently have an analog. Engine treats these
+    as ephemeral stream events: they do NOT enter session.messages.
+    """
+
+    type: Literal["thinking_delta"] = "thinking_delta"
+    text: str
+
+
 class ProviderStreamDone(_ProviderStreamEventBase):
     """Terminal event for a single LLM round."""
 
@@ -68,7 +80,9 @@ class ProviderStreamDone(_ProviderStreamEventBase):
     output_tokens: int | None = None
 
 
-ProviderStreamEvent = ProviderTextDelta | ProviderToolCall | ProviderStreamDone
+ProviderStreamEvent = (
+    ProviderTextDelta | ProviderToolCall | ProviderThinkingDelta | ProviderStreamDone
+)
 
 
 class LLMProvider(Protocol):

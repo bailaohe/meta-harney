@@ -469,3 +469,21 @@ class TestAnthropicProviderContract(LLMProviderContract):
 
     def make_provider(self) -> AnthropicProvider:
         return AnthropicProvider(api_key="test-contract")
+
+
+def test_provider_thinking_delta_construction() -> None:
+    """ProviderThinkingDelta is a valid stream event variant."""
+    from meta_harney.providers.base import (
+        ProviderStreamEvent,  # noqa: F401
+        ProviderThinkingDelta,
+    )
+
+    ev = ProviderThinkingDelta(text="reasoning step 1")
+    assert ev.text == "reasoning step 1"
+    assert ev.type == "thinking_delta"
+
+    # Must be a member of ProviderStreamEvent union
+    def accepts_event(_: ProviderStreamEvent) -> None:
+        pass
+
+    accepts_event(ev)  # type-checker enforcement; no runtime assertion needed
