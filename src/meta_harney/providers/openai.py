@@ -7,6 +7,7 @@ Phase 5 task 1: scaffold + constructor + api_key validation.
 Tasks 2-7 implement message conversion, stream event mapping, and error
 classification.
 """
+
 from __future__ import annotations
 
 import json
@@ -62,9 +63,7 @@ def _convert_messages_to_openai(
     for msg in messages:
         if msg.role == "system":
             # In-band system message: keep verbatim text
-            text = "".join(
-                b.text for b in msg.content if isinstance(b, TextBlock)
-            )
+            text = "".join(b.text for b in msg.content if isinstance(b, TextBlock))
             out.append({"role": "system", "content": text})
             continue
 
@@ -72,14 +71,14 @@ def _convert_messages_to_openai(
             # Tool result: one ToolResultBlock per OpenAI tool message
             for block in msg.content:
                 if isinstance(block, ToolResultBlock):
-                    content_str = (
-                        block.error if not block.success else str(block.output)
+                    content_str = block.error if not block.success else str(block.output)
+                    out.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": block.invocation_id,
+                            "content": content_str or "",
+                        }
                     )
-                    out.append({
-                        "role": "tool",
-                        "tool_call_id": block.invocation_id,
-                        "content": content_str or "",
-                    })
             continue
 
         # user or assistant
@@ -98,19 +97,23 @@ def _convert_messages_to_openai(
                     url = block.url
                 else:
                     url = f"data:{block.media_type};base64,{block.data}"
-                content_parts.append({
-                    "type": "image_url",
-                    "image_url": {"url": url},
-                })
+                content_parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": url},
+                    }
+                )
             elif isinstance(block, ToolCallBlock):
-                tool_calls.append({
-                    "id": block.invocation_id,
-                    "type": "function",
-                    "function": {
-                        "name": block.name,
-                        "arguments": json.dumps(block.args),
-                    },
-                })
+                tool_calls.append(
+                    {
+                        "id": block.invocation_id,
+                        "type": "function",
+                        "function": {
+                            "name": block.name,
+                            "arguments": json.dumps(block.args),
+                        },
+                    }
+                )
             # ToolResultBlock in user/assistant message is unexpected — skip
 
         entry: dict[str, Any] = {"role": msg.role}
@@ -244,13 +247,9 @@ class OpenAIProvider:
                 raise RetryableProviderError(
                     f"openai transient error (status {status}): {exc}"
                 ) from exc
-            raise NonRetryableProviderError(
-                f"openai API error (status {status}): {exc}"
-            ) from exc
+            raise NonRetryableProviderError(f"openai API error (status {status}): {exc}") from exc
         except APIConnectionError as exc:
-            raise RetryableProviderError(
-                f"openai connection error: {exc}"
-            ) from exc
+            raise RetryableProviderError(f"openai connection error: {exc}") from exc
 
         # Emit ProviderToolCall for each accumulated tool call (sorted by index)
         for idx in sorted(tool_call_buffer):

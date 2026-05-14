@@ -1,4 +1,5 @@
 """Tests for OpenAIProvider — Chat Completions adapter."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -111,28 +112,36 @@ def test_convert_inband_system_message() -> None:
 def test_convert_assistant_with_tool_call() -> None:
     msgs = [
         Message(role="user", content=[TextBlock(text="search")]),
-        Message(role="assistant", content=[
-            TextBlock(text="Let me check."),
-            ToolCallBlock(invocation_id="call_1", name="search", args={"q": "x"}),
-        ]),
+        Message(
+            role="assistant",
+            content=[
+                TextBlock(text="Let me check."),
+                ToolCallBlock(invocation_id="call_1", name="search", args={"q": "x"}),
+            ],
+        ),
     ]
     converted = _convert_messages_to_openai(msgs, system_prompt="")
     assistant_msg = converted[-1]
     assert assistant_msg["role"] == "assistant"
     assert assistant_msg["content"] == "Let me check."
-    assert assistant_msg["tool_calls"] == [{
-        "id": "call_1",
-        "type": "function",
-        "function": {"name": "search", "arguments": '{"q": "x"}'},
-    }]
+    assert assistant_msg["tool_calls"] == [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "search", "arguments": '{"q": "x"}'},
+        }
+    ]
 
 
 def test_convert_assistant_tool_call_only_no_text() -> None:
     """Assistant message with only ToolCallBlocks: content is None."""
     msgs = [
-        Message(role="assistant", content=[
-            ToolCallBlock(invocation_id="c1", name="f", args={}),
-        ]),
+        Message(
+            role="assistant",
+            content=[
+                ToolCallBlock(invocation_id="c1", name="f", args={}),
+            ],
+        ),
     ]
     converted = _convert_messages_to_openai(msgs, system_prompt="")
     assert converted[0]["content"] is None
@@ -142,9 +151,12 @@ def test_convert_assistant_tool_call_only_no_text() -> None:
 def test_convert_tool_result_message() -> None:
     """tool role → OpenAI tool role with tool_call_id."""
     msgs = [
-        Message(role="tool", content=[
-            ToolResultBlock(invocation_id="c1", success=True, output="result text"),
-        ]),
+        Message(
+            role="tool",
+            content=[
+                ToolResultBlock(invocation_id="c1", success=True, output="result text"),
+            ],
+        ),
     ]
     converted = _convert_messages_to_openai(msgs, system_prompt="")
     assert converted[0]["role"] == "tool"
@@ -154,9 +166,12 @@ def test_convert_tool_result_message() -> None:
 
 def test_convert_failed_tool_result_includes_error() -> None:
     msgs = [
-        Message(role="tool", content=[
-            ToolResultBlock(invocation_id="c1", success=False, output=None, error="boom"),
-        ]),
+        Message(
+            role="tool",
+            content=[
+                ToolResultBlock(invocation_id="c1", success=False, output=None, error="boom"),
+            ],
+        ),
     ]
     converted = _convert_messages_to_openai(msgs, system_prompt="")
     assert "boom" in converted[0]["content"]
@@ -165,10 +180,13 @@ def test_convert_failed_tool_result_includes_error() -> None:
 def test_convert_image_block_uses_image_url() -> None:
     """ImageBlock with url → OpenAI image_url content part."""
     msgs = [
-        Message(role="user", content=[
-            TextBlock(text="see this"),
-            ImageBlock(url="https://x/y.png", media_type="image/png"),
-        ]),
+        Message(
+            role="user",
+            content=[
+                TextBlock(text="see this"),
+                ImageBlock(url="https://x/y.png", media_type="image/png"),
+            ],
+        ),
     ]
     converted = _convert_messages_to_openai(msgs, system_prompt="")
     content = converted[0]["content"]
@@ -183,9 +201,12 @@ def test_convert_image_block_uses_image_url() -> None:
 def test_convert_image_block_base64() -> None:
     """Base64 ImageBlock → data URL in image_url."""
     msgs = [
-        Message(role="user", content=[
-            ImageBlock(data="iVBORw0KGgo...", media_type="image/png"),
-        ]),
+        Message(
+            role="user",
+            content=[
+                ImageBlock(data="iVBORw0KGgo...", media_type="image/png"),
+            ],
+        ),
     ]
     converted = _convert_messages_to_openai(msgs, system_prompt="")
     content = converted[0]["content"]
@@ -202,14 +223,16 @@ def test_convert_tools_to_openai_basic() -> None:
         ),
     ]
     converted = _convert_tools_to_openai(tools)
-    assert converted == [{
-        "type": "function",
-        "function": {
-            "name": "echo",
-            "description": "Echoes input",
-            "parameters": {"type": "object", "properties": {"text": {"type": "string"}}},
-        },
-    }]
+    assert converted == [
+        {
+            "type": "function",
+            "function": {
+                "name": "echo",
+                "description": "Echoes input",
+                "parameters": {"type": "object", "properties": {"text": {"type": "string"}}},
+            },
+        }
+    ]
 
 
 def test_convert_empty_tools() -> None:
