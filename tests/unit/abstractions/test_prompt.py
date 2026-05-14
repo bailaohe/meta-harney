@@ -20,4 +20,6 @@ async def test_protocol_satisfied_by_duck_typing():
 
     msgs = await builder.build_context_messages("s1")
     assert len(msgs) == 1
-    assert msgs[0].content[0].text == "prior"
+    first_block = msgs[0].content[0]
+    assert isinstance(first_block, TextBlock)
+    assert first_block.text == "prior"

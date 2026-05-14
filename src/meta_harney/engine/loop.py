@@ -1,4 +1,5 @@
 """Engine main loop: run_turn() orchestrator."""
+
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Callable
@@ -215,11 +216,13 @@ async def run_turn(
             if text_chunks:
                 assistant_blocks.append(TextBlock(text="".join(text_chunks)))
             for tc in tool_calls:
-                assistant_blocks.append(ToolCallBlock(
-                    invocation_id=tc.invocation_id,
-                    name=tc.name,
-                    args=tc.args,
-                ))
+                assistant_blocks.append(
+                    ToolCallBlock(
+                        invocation_id=tc.invocation_id,
+                        name=tc.name,
+                        args=tc.args,
+                    )
+                )
             session.messages.append(Message(role="assistant", content=assistant_blocks))
 
             # Fire post_llm hook

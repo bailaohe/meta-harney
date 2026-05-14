@@ -1,4 +1,5 @@
 """Contract tests for MultiAgentBackend implementations."""
+
 from __future__ import annotations
 
 from abc import abstractmethod
@@ -22,9 +23,7 @@ class MultiAgentBackendContract:
 
     async def test_blocking_spawn_returns_handle(self) -> None:
         backend, store = self.make_backend_and_store()
-        await store.save(
-            Session(id="p-1", created_at=datetime.now(timezone.utc))
-        )
+        await store.save(Session(id="p-1", created_at=datetime.now(timezone.utc)))
         spec = AgentSpec(name="t", instructions="be helpful", allowed_tools=[])
         handle = await backend.spawn(
             spec=spec,
@@ -37,9 +36,7 @@ class MultiAgentBackendContract:
 
     async def test_detached_spawn_returns_handle(self) -> None:
         backend, store = self.make_backend_and_store()
-        await store.save(
-            Session(id="p-2", created_at=datetime.now(timezone.utc))
-        )
+        await store.save(Session(id="p-2", created_at=datetime.now(timezone.utc)))
         spec = AgentSpec(name="t", instructions="be helpful", allowed_tools=[])
         handle = await backend.spawn(
             spec=spec,
@@ -52,9 +49,7 @@ class MultiAgentBackendContract:
 
     async def test_join_returns_tool_result(self) -> None:
         backend, store = self.make_backend_and_store()
-        await store.save(
-            Session(id="p-3", created_at=datetime.now(timezone.utc))
-        )
+        await store.save(Session(id="p-3", created_at=datetime.now(timezone.utc)))
         spec = AgentSpec(name="t", instructions="be helpful", allowed_tools=[])
         handle = await backend.spawn(
             spec=spec,
@@ -67,9 +62,7 @@ class MultiAgentBackendContract:
 
     async def test_status_succeeded_after_join(self) -> None:
         backend, store = self.make_backend_and_store()
-        await store.save(
-            Session(id="p-4", created_at=datetime.now(timezone.utc))
-        )
+        await store.save(Session(id="p-4", created_at=datetime.now(timezone.utc)))
         spec = AgentSpec(name="t", instructions="be helpful", allowed_tools=[])
         handle = await backend.spawn(
             spec=spec,

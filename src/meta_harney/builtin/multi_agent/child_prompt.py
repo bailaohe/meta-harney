@@ -4,6 +4,7 @@ Wraps a SessionStore + overrides system prompt with AgentSpec.instructions.
 Used by InProcessMultiAgentBackend to give each child agent a different
 system prompt than the parent.
 """
+
 from __future__ import annotations
 
 from meta_harney.abstractions._types import Message

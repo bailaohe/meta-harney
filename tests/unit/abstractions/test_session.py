@@ -72,6 +72,8 @@ async def test_protocol_satisfied_by_duck_typing():
     store: SessionStore = FakeStore()
     s = Session(id="s1", tenant_id="acme", created_at=datetime.now(timezone.utc))
     await store.save(s)
-    assert (await store.load("s1")).id == "s1"
+    loaded = await store.load("s1")
+    assert loaded is not None
+    assert loaded.id == "s1"
     assert (await store.load("s1", tenant_id="other")) is None
     assert len(await store.list(tenant_id="acme")) == 1

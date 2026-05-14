@@ -1,3 +1,5 @@
+from typing import Literal
+
 from meta_harney.abstractions.tool import ToolInvocation
 from meta_harney.builtin.permission.deny_all import DenyAllPermissionResolver
 from tests.contracts.permission_resolver import PermissionResolverContract
@@ -7,7 +9,7 @@ class TestDenyAll(PermissionResolverContract):
     def make_resolver(self) -> DenyAllPermissionResolver:
         return DenyAllPermissionResolver()
 
-    def expected_verdict(self) -> str:
+    def expected_verdict(self) -> Literal["allow", "deny", "ask"]:
         return "deny"
 
 

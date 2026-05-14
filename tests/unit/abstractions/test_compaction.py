@@ -19,4 +19,6 @@ async def test_protocol_satisfied_by_duck_typing():
     assert not await strat.should_compact("s", 400, 1000)
     msgs = await strat.compact("s")
     assert len(msgs) == 1
-    assert msgs[0].content[0].text == "summary"
+    block = msgs[0].content[0]
+    assert isinstance(block, TextBlock)
+    assert block.text == "summary"

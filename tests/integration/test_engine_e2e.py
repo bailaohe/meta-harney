@@ -40,6 +40,7 @@ from meta_harney.providers.base import (
 from meta_harney.providers.base import (
     ProviderStreamDone,
     ProviderTextDelta,
+    ProviderToolCall,
 )
 from meta_harney.providers.base import (
     ProviderStreamEvent as _PSE,
@@ -47,7 +48,7 @@ from meta_harney.providers.base import (
 from meta_harney.providers.base import (
     ToolSpec as _TS,
 )
-from meta_harney.providers.fake import FakeLLMProvider, FakeRound, ProviderToolCall
+from meta_harney.providers.fake import FakeLLMProvider, FakeRound
 from meta_harney.runtime import AgentRuntime
 
 
@@ -236,7 +237,7 @@ class _RecordingHook(BaseHook):
 
     def __init__(self, kinds: set[HookEventKind]) -> None:
         # Override ClassVar per-instance for test recording purposes.
-        self.subscribed_events = kinds  # type: ignore[assignment]
+        self.subscribed_events = kinds  # type: ignore[misc]
         self.received: list[HookEvent] = []
 
     async def handle(self, event: HookEvent) -> HookDecision:
@@ -478,15 +479,15 @@ async def test_cancellation_preserves_session() -> None:
             config: ProviderCallConfig,
         ) -> AsyncGenerator[ProviderStreamEvent, None]:
             await asyncio.sleep(10.0)  # will be cancelled
-            # unreachable yield to make it a generator
+            # unreachable yield to make this an async generator
             if False:
-                yield  # type: ignore[unreachable]
+                yield
 
     async def runner() -> None:
         async for _ev in run_turn(
             session_id="s1",
             user_message=Message(role="user", content=[TextBlock(text="hi")]),
-            provider=_BlockingProvider(),  # type: ignore[arg-type]
+            provider=_BlockingProvider(),
             prompt_builder=MinimalPromptBuilder(session_store=store),
             permission_resolver=AllowAllPermissionResolver(),
             tools={},
@@ -556,7 +557,7 @@ async def test_trace_sink_failure_does_not_break_turn() -> None:
         tools={},
         hooks=[],
         session_store=store,
-        trace_sink=broken_sink,  # type: ignore[arg-type]
+        trace_sink=broken_sink,
         config=RuntimeConfig(model="x"),
     ):
         events.append(ev)
@@ -608,7 +609,7 @@ async def test_retry_recovers_from_transient_failure() -> None:
     async for ev in run_turn(
         session_id="s1",
         user_message=Message(role="user", content=[TextBlock(text="hi")]),
-        provider=provider,  # type: ignore[arg-type]
+        provider=provider,
         prompt_builder=MinimalPromptBuilder(session_store=store),
         permission_resolver=AllowAllPermissionResolver(),
         tools={},
@@ -641,7 +642,7 @@ async def test_retry_gives_up_after_max_attempts() -> None:
         async for _ev in run_turn(
             session_id="s1",
             user_message=Message(role="user", content=[TextBlock(text="hi")]),
-            provider=provider,  # type: ignore[arg-type]
+            provider=provider,
             prompt_builder=MinimalPromptBuilder(session_store=store),
             permission_resolver=AllowAllPermissionResolver(),
             tools={},
@@ -673,7 +674,7 @@ async def test_non_retryable_propagates_immediately() -> None:
         ) -> AsyncGenerator[_PSE, None]:
             self.attempts += 1
             raise NonRetryableProviderError("auth failed")
-            yield  # type: ignore[unreachable]
+            yield  # unreachable — needed to make this an async generator
 
     store = MemorySessionStore()
     await _new_session(store)
@@ -683,7 +684,7 @@ async def test_non_retryable_propagates_immediately() -> None:
         async for _ev in run_turn(
             session_id="s1",
             user_message=Message(role="user", content=[TextBlock(text="hi")]),
-            provider=provider,  # type: ignore[arg-type]
+            provider=provider,
             prompt_builder=MinimalPromptBuilder(session_store=store),
             permission_resolver=AllowAllPermissionResolver(),
             tools={},
@@ -703,15 +704,21 @@ async def test_non_retryable_propagates_immediately() -> None:
 async def test_runtime_drives_full_turn_e2e() -> None:
     """AgentRuntime composes services and drives a multi-message conversation."""
     store = MemorySessionStore()
-    provider = FakeLLMProvider(rounds=[
-        FakeRound(
-            tool_calls=[ProviderToolCall(
-                invocation_id="i1", name="echo", args={"text": "world"},
-            )],
-            stop_reason="tool_use",
-        ),
-        FakeRound(text="Got it.", stop_reason="end_turn"),
-    ])
+    provider = FakeLLMProvider(
+        rounds=[
+            FakeRound(
+                tool_calls=[
+                    ProviderToolCall(
+                        invocation_id="i1",
+                        name="echo",
+                        args={"text": "world"},
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            FakeRound(text="Got it.", stop_reason="end_turn"),
+        ]
+    )
 
     rt = AgentRuntime(
         provider=provider,
@@ -775,21 +782,27 @@ async def test_e2e_parent_spawns_blocking_child() -> None:
     """Parent agent calls delegate_to_helper tool → child agent runs → result returns."""
     store = MemorySessionStore()
 
-    parent_provider = FakeLLMProvider(rounds=[
-        FakeRound(
-            tool_calls=[ProviderToolCall(
-                invocation_id="i1",
-                name="delegate_to_helper",
-                args={"question": "what is 2+2?"},
-            )],
-            stop_reason="tool_use",
-        ),
-        FakeRound(text="The helper says 4.", stop_reason="end_turn"),
-    ])
+    parent_provider = FakeLLMProvider(
+        rounds=[
+            FakeRound(
+                tool_calls=[
+                    ProviderToolCall(
+                        invocation_id="i1",
+                        name="delegate_to_helper",
+                        args={"question": "what is 2+2?"},
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            FakeRound(text="The helper says 4.", stop_reason="end_turn"),
+        ]
+    )
 
-    child_provider = FakeLLMProvider(rounds=[
-        FakeRound(text="4", stop_reason="end_turn"),
-    ])
+    child_provider = FakeLLMProvider(
+        rounds=[
+            FakeRound(text="4", stop_reason="end_turn"),
+        ]
+    )
 
     backend = InProcessMultiAgentBackend(
         provider=child_provider,
@@ -827,8 +840,10 @@ async def test_e2e_parent_spawns_blocking_child() -> None:
 
 async def test_e2e_detached_child_status_then_join() -> None:
     """Parent spawns a detached child, polls status, then joins."""
+
     class _SlowChildProvider:
         """Sleeps briefly, then emits one text round."""
+
         async def stream(
             self,
             messages: list[Message],
@@ -843,7 +858,7 @@ async def test_e2e_detached_child_status_then_join() -> None:
     store = MemorySessionStore()
 
     backend = InProcessMultiAgentBackend(
-        provider=_SlowChildProvider(),  # type: ignore[arg-type]
+        provider=_SlowChildProvider(),
         permission_resolver=AllowAllPermissionResolver(),
         session_store=store,
         trace_sink=NullSink(),

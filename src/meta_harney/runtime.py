@@ -6,6 +6,7 @@ service composition, and a clean two-method API (invoke + stream).
 Phase 3 scope: create_session + invoke + stream. Multi-agent backend is
 wired in (Phase 3 Task 11) so tools can spawn child agents.
 """
+
 from __future__ import annotations
 
 import uuid

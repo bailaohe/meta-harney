@@ -80,7 +80,6 @@ def test_tool_to_spec_basic() -> None:
     assert "text" in spec.input_schema["properties"]
 
 
-
 def test_runtime_config_new_fields_defaults() -> None:
     c = RuntimeConfig(model="x")
     assert c.max_tokens is None

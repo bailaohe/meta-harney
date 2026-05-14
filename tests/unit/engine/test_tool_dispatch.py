@@ -175,7 +175,7 @@ async def test_execute_tool_permission_ask_is_treated_as_deny() -> None:
     from meta_harney.abstractions.permission import PermissionDecision
 
     class _AskResolver:
-        async def resolve(self, invocation, session_id: str) -> PermissionDecision:
+        async def resolve(self, invocation: ToolInvocation, session_id: str) -> PermissionDecision:
             return PermissionDecision(verdict="ask", reason="needs manager approval")
 
     ctx = _make_ctx()

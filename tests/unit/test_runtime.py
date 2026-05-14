@@ -1,4 +1,5 @@
 """Tests for AgentRuntime — top-level SDK entry point."""
+
 from __future__ import annotations
 
 from typing import ClassVar
@@ -22,9 +23,11 @@ from meta_harney.runtime import AgentRuntime
 def _runtime(store: MemorySessionStore | None = None) -> AgentRuntime:
     s = store or MemorySessionStore()
     return AgentRuntime(
-        provider=FakeLLMProvider(rounds=[
-            FakeRound(text="ok", stop_reason="end_turn"),
-        ]),
+        provider=FakeLLMProvider(
+            rounds=[
+                FakeRound(text="ok", stop_reason="end_turn"),
+            ]
+        ),
         prompt_builder=MinimalPromptBuilder(session_store=s),
         permission_resolver=AllowAllPermissionResolver(),
         session_store=s,
@@ -78,9 +81,11 @@ async def test_create_session_duplicate_id_raises() -> None:
 async def test_stream_yields_events() -> None:
     store = MemorySessionStore()
     rt = AgentRuntime(
-        provider=FakeLLMProvider(rounds=[
-            FakeRound(text="hello from stream", stop_reason="end_turn"),
-        ]),
+        provider=FakeLLMProvider(
+            rounds=[
+                FakeRound(text="hello from stream", stop_reason="end_turn"),
+            ]
+        ),
         prompt_builder=MinimalPromptBuilder(session_store=store),
         permission_resolver=AllowAllPermissionResolver(),
         session_store=store,
@@ -101,10 +106,12 @@ async def test_stream_accepts_string_or_message() -> None:
     """stream() accepts a plain string (creates user TextBlock) OR a full Message."""
     store = MemorySessionStore()
     rt = AgentRuntime(
-        provider=FakeLLMProvider(rounds=[
-            FakeRound(text="a", stop_reason="end_turn"),
-            FakeRound(text="b", stop_reason="end_turn"),
-        ]),
+        provider=FakeLLMProvider(
+            rounds=[
+                FakeRound(text="a", stop_reason="end_turn"),
+                FakeRound(text="b", stop_reason="end_turn"),
+            ]
+        ),
         prompt_builder=MinimalPromptBuilder(session_store=store),
         permission_resolver=AllowAllPermissionResolver(),
         session_store=store,
@@ -124,20 +131,18 @@ async def test_stream_accepts_string_or_message() -> None:
     loaded = await store.load(s.id)
     assert loaded is not None
     user_msgs = [m for m in loaded.messages if m.role == "user"]
-    user_texts = [
-        m.content[0].text
-        for m in user_msgs
-        if isinstance(m.content[0], TextBlock)
-    ]
+    user_texts = [m.content[0].text for m in user_msgs if isinstance(m.content[0], TextBlock)]
     assert user_texts == ["first", "second"]
 
 
 async def test_invoke_returns_final_assistant_message() -> None:
     store = MemorySessionStore()
     rt = AgentRuntime(
-        provider=FakeLLMProvider(rounds=[
-            FakeRound(text="The answer is 42.", stop_reason="end_turn"),
-        ]),
+        provider=FakeLLMProvider(
+            rounds=[
+                FakeRound(text="The answer is 42.", stop_reason="end_turn"),
+            ]
+        ),
         prompt_builder=MinimalPromptBuilder(session_store=store),
         permission_resolver=AllowAllPermissionResolver(),
         session_store=store,
@@ -156,9 +161,11 @@ async def test_invoke_returns_empty_assistant_on_no_text() -> None:
     """When LLM emits no text, return assistant message with empty content."""
     store = MemorySessionStore()
     rt = AgentRuntime(
-        provider=FakeLLMProvider(rounds=[
-            FakeRound(text="", stop_reason="end_turn"),
-        ]),
+        provider=FakeLLMProvider(
+            rounds=[
+                FakeRound(text="", stop_reason="end_turn"),
+            ]
+        ),
         prompt_builder=MinimalPromptBuilder(session_store=store),
         permission_resolver=AllowAllPermissionResolver(),
         session_store=store,
@@ -178,6 +185,7 @@ class _MultiAgentInput(_PBM):
 
 class _ProbeMultiAgentTool(BaseTool):
     """Reads ctx.multi_agent and returns whether it was set."""
+
     name: ClassVar[str] = "probe_multi_agent"
     description: ClassVar[str] = "Reports whether ctx.multi_agent is set."
     input_schema: ClassVar[type[_PBM]] = _MultiAgentInput
@@ -202,15 +210,21 @@ async def test_runtime_threads_multi_agent_into_tool_context() -> None:
         hooks=[],
     )
 
-    provider = FakeLLMProvider(rounds=[
-        FakeRound(
-            tool_calls=[ProviderToolCall(
-                invocation_id="i1", name="probe_multi_agent", args={},
-            )],
-            stop_reason="tool_use",
-        ),
-        FakeRound(text="done", stop_reason="end_turn"),
-    ])
+    provider = FakeLLMProvider(
+        rounds=[
+            FakeRound(
+                tool_calls=[
+                    ProviderToolCall(
+                        invocation_id="i1",
+                        name="probe_multi_agent",
+                        args={},
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            FakeRound(text="done", stop_reason="end_turn"),
+        ]
+    )
 
     rt = AgentRuntime(
         provider=provider,
@@ -237,15 +251,21 @@ async def test_runtime_threads_multi_agent_into_tool_context() -> None:
 async def test_runtime_without_multi_agent_tool_sees_none() -> None:
     """If AgentRuntime was NOT given multi_agent, ctx.multi_agent is None."""
     store = MemorySessionStore()
-    provider = FakeLLMProvider(rounds=[
-        FakeRound(
-            tool_calls=[ProviderToolCall(
-                invocation_id="i1", name="probe_multi_agent", args={},
-            )],
-            stop_reason="tool_use",
-        ),
-        FakeRound(text="done", stop_reason="end_turn"),
-    ])
+    provider = FakeLLMProvider(
+        rounds=[
+            FakeRound(
+                tool_calls=[
+                    ProviderToolCall(
+                        invocation_id="i1",
+                        name="probe_multi_agent",
+                        args={},
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            FakeRound(text="done", stop_reason="end_turn"),
+        ]
+    )
 
     rt = AgentRuntime(
         provider=provider,

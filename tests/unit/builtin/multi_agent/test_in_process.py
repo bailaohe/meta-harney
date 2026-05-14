@@ -1,4 +1,5 @@
 """Tests for InProcessMultiAgentBackend (Phase 3)."""
+
 from __future__ import annotations
 
 import asyncio
@@ -98,9 +99,11 @@ async def test_spawn_blocking_returns_handle_with_result() -> None:
     parent = Session(id="parent-1", created_at=datetime.now(timezone.utc))
     await store.save(parent)
 
-    provider = FakeLLMProvider(rounds=[
-        FakeRound(text="child output text", stop_reason="end_turn"),
-    ])
+    provider = FakeLLMProvider(
+        rounds=[
+            FakeRound(text="child output text", stop_reason="end_turn"),
+        ]
+    )
 
     backend = InProcessMultiAgentBackend(
         provider=provider,
@@ -137,6 +140,7 @@ async def test_spawn_blocking_returns_handle_with_result() -> None:
 
 async def test_spawn_blocking_filters_tools_by_allowed_list() -> None:
     """Children only see tools listed in spec.allowed_tools."""
+
     class _DummyInput(BaseModel):
         pass
 
@@ -295,7 +299,7 @@ async def test_status_for_running_child() -> None:
     await store.save(parent)
 
     backend = InProcessMultiAgentBackend(
-        provider=_SlowProvider(),  # type: ignore[arg-type]
+        provider=_SlowProvider(),
         permission_resolver=AllowAllPermissionResolver(),
         session_store=store,
         trace_sink=NullSink(),
@@ -331,7 +335,7 @@ class _BlockingProvider:
         config: ProviderCallConfig,
     ) -> AsyncGenerator[ProviderStreamEvent, None]:
         await asyncio.sleep(10.0)
-        yield  # type: ignore[unreachable]
+        yield  # type: ignore[misc]  # unreachable but needed to make this an async generator
 
 
 async def test_cancel_detached_child() -> None:
@@ -341,7 +345,7 @@ async def test_cancel_detached_child() -> None:
     await store.save(parent)
 
     backend = InProcessMultiAgentBackend(
-        provider=_BlockingProvider(),  # type: ignore[arg-type]
+        provider=_BlockingProvider(),
         permission_resolver=AllowAllPermissionResolver(),
         session_store=store,
         trace_sink=NullSink(),
@@ -385,7 +389,7 @@ async def test_join_timeout_raises_child_timeout_error() -> None:
     await store.save(parent)
 
     backend = InProcessMultiAgentBackend(
-        provider=_BlockingProvider(),  # type: ignore[arg-type]
+        provider=_BlockingProvider(),
         permission_resolver=AllowAllPermissionResolver(),
         session_store=store,
         trace_sink=NullSink(),
@@ -413,13 +417,15 @@ class TestInProcessMultiAgentBackendContract(MultiAgentBackendContract):
     def make_backend_and_store(self) -> tuple[InProcessMultiAgentBackend, MemorySessionStore]:
         store = MemorySessionStore()
         backend = InProcessMultiAgentBackend(
-            provider=FakeLLMProvider(rounds=[
-                FakeRound(text="contract test result", stop_reason="end_turn"),
-                FakeRound(text="contract test result", stop_reason="end_turn"),
-                FakeRound(text="contract test result", stop_reason="end_turn"),
-                FakeRound(text="contract test result", stop_reason="end_turn"),
-                FakeRound(text="contract test result", stop_reason="end_turn"),
-            ]),
+            provider=FakeLLMProvider(
+                rounds=[
+                    FakeRound(text="contract test result", stop_reason="end_turn"),
+                    FakeRound(text="contract test result", stop_reason="end_turn"),
+                    FakeRound(text="contract test result", stop_reason="end_turn"),
+                    FakeRound(text="contract test result", stop_reason="end_turn"),
+                    FakeRound(text="contract test result", stop_reason="end_turn"),
+                ]
+            ),
             permission_resolver=AllowAllPermissionResolver(),
             session_store=store,
             trace_sink=NullSink(),

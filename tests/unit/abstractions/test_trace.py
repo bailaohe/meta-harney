@@ -35,7 +35,7 @@ def test_trace_event_with_parent():
 
 async def test_protocol_satisfied_by_duck_typing():
     class CollectingSink:
-        def __init__(self):
+        def __init__(self) -> None:
             self.events: list[TraceEvent] = []
             self.flushed = False
 
@@ -45,7 +45,9 @@ async def test_protocol_satisfied_by_duck_typing():
         async def flush(self) -> None:
             self.flushed = True
 
-    sink: TraceSink = CollectingSink()
+    # Use the concrete type so mypy knows about .events and .flushed
+    sink = CollectingSink()
+    _protocol_sink: TraceSink = sink  # verify duck-typing compatibility
     ev = TraceEvent(
         ts=datetime.now(timezone.utc),
         session_id="s1",

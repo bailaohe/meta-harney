@@ -60,11 +60,17 @@ async def test_compact_preserves_recent_and_system():
     )
     new = await c.compact("s1")
     assert new[0].role == "system"
-    assert "SYS" in new[0].content[0].text
+    b0 = new[0].content[0]
+    assert isinstance(b0, TextBlock)
+    assert "SYS" in b0.text
     assert new[1].role == "system"
-    assert "Summary" in new[1].content[0].text
+    b1 = new[1].content[0]
+    assert isinstance(b1, TextBlock)
+    assert "Summary" in b1.text
     assert len(new) == 1 + 1 + 5
-    assert new[-1].content[0].text == "u-19"
+    blast = new[-1].content[0]
+    assert isinstance(blast, TextBlock)
+    assert blast.text == "u-19"
 
 
 async def test_compact_short_history_unchanged():

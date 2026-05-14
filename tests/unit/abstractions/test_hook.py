@@ -11,11 +11,12 @@ from meta_harney.abstractions.hook import (
     BaseHook,
     HookDecision,
     HookEvent,
+    HookEventKind,
 )
 
 
 def test_hook_event_kinds():
-    valid = [
+    valid: list[HookEventKind] = [
         "pre_tool",
         "post_tool",
         "pre_llm",
@@ -59,7 +60,7 @@ def test_base_hook_is_abstract():
 
 def test_concrete_hook_subclass():
     class LogHook(BaseHook):
-        subscribed_events: ClassVar[set[str]] = {"pre_tool", "post_tool"}
+        subscribed_events: ClassVar[set[HookEventKind]] = {"pre_tool", "post_tool"}
 
         async def handle(self, event: HookEvent) -> HookDecision:
             return HookDecision(allow=True)

@@ -7,6 +7,7 @@ result; detached mode creates an asyncio.Task and stores it.
 Task 8 implements spawn() blocking mode.
 Task 9 implements spawn() detached + join + status + cancel.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -84,9 +85,7 @@ class InProcessMultiAgentBackend:
 
         # Filter parent's toolset to those allowed in the spec
         child_tools = {
-            name: tool
-            for name, tool in self._all_tools.items()
-            if name in spec.allowed_tools
+            name: tool for name, tool in self._all_tools.items() if name in spec.allowed_tools
         }
 
         # Build a config that respects spec.max_iters

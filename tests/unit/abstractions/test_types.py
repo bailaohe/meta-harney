@@ -55,7 +55,7 @@ def test_message_role_constrained():
     Message(role="system", content=[TextBlock(text="hi")])
     Message(role="tool", content=[TextBlock(text="hi")])
     with pytest.raises(ValidationError):
-        Message(role="customer", content=[TextBlock(text="hi")])  # not allowed
+        Message(role="customer", content=[TextBlock(text="hi")])  # type: ignore[arg-type]  # not allowed
 
 
 def test_message_author_is_free_form():

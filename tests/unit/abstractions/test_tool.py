@@ -130,6 +130,6 @@ def test_tool_context_multi_agent_field_accepts_backend() -> None:
         trace_sink=object(),  # type: ignore[arg-type]
         current_span_id="x",
         new_span_id=lambda: _uuid.uuid4().hex[:16],
-        multi_agent=backend,  # type: ignore[arg-type]
+        multi_agent=backend,
     )
     assert ctx.multi_agent is backend
