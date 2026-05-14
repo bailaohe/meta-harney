@@ -37,6 +37,13 @@ export type {
   SessionListEntry,
   SessionLoadResult,
   ToolSpec,
+  ChatMessage,
+  PermissionDecision,
+  PermissionRequest,
+  PermissionResponse,
+  StreamEvent,
+  SendMessageResult,
+  SendMessageHandle,
 } from "./client.js";
 
 export const VERSION = "0.1.0";

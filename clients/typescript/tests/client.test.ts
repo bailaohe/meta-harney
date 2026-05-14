@@ -10,7 +10,7 @@ import { describe, it, expect } from "vitest";
 import { BridgeClient } from "../src/client.js";
 import type { Framing } from "../src/framing.js";
 import type { ChildProcessTransport } from "../src/transport.js";
-import { BridgeError, BridgeDisconnected } from "../src/errors.js";
+import { BridgeError, BridgeCancelled, BridgeDisconnected } from "../src/errors.js";
 
 interface JsonRpcLike {
   jsonrpc: "2.0";
@@ -307,14 +307,17 @@ describe("BridgeClient lifecycle", () => {
     await client.exit();
   });
 
-  it("replies with method-not-found when no incoming-request handler is set", async () => {
+  it("replies with method-not-found for unknown server-initiated requests", async () => {
     const t = new FakeTransport();
     const client = makeClient(t);
     await client.start();
+    // The default onIncomingRequest hook (installed in the constructor) only
+    // knows `permission/request`; everything else round-trips as -32601 so a
+    // misbehaving server doesn't hang waiting on us.
     t.feed({
       jsonrpc: "2.0",
       id: -3,
-      method: "permission/request",
+      method: "some/unknown",
       params: {},
     });
     await new Promise((r) => setTimeout(r, 10));
@@ -497,6 +500,242 @@ describe("BridgeClient sessions + tools", () => {
       code: -32004,
       message: "session not found",
     });
+    await client.exit();
+  });
+});
+
+describe("BridgeClient sendMessage handle", () => {
+  /**
+   * Tick the event loop a few times so the read loop can pump pending
+   * inbound frames AND any handler-triggered writes settle on `t.sent`.
+   */
+  const flush = async (n = 3): Promise<void> => {
+    for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r));
+  };
+
+  const userMsg = {
+    role: "user",
+    content: [{ type: "text", text: "hi" }],
+  };
+
+  it("sends session.send_message with the expected payload", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    const handle = client.sendMessage("sess-1", userMsg);
+    await flush();
+    expect(handle.requestId).toBe(1);
+    const sent = decode(t.sent[0]!);
+    expect(sent.method).toBe("session.send_message");
+    expect(sent.id).toBe(1);
+    expect(sent.params).toEqual({ session_id: "sess-1", message: userMsg });
+    // Resolve the inflight request so exit() can shut down cleanly.
+    t.feed({
+      jsonrpc: "2.0",
+      id: 1,
+      result: { stopped_reason: "completed" },
+    });
+    await handle.done;
+    await client.exit();
+  });
+
+  it("routes stream/event notifications to onEvent handlers by request_id", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    const handle = client.sendMessage("sess-1", userMsg);
+    await flush();
+    const events: unknown[] = [];
+    handle.onEvent((e) => events.push(e));
+    t.feed({
+      jsonrpc: "2.0",
+      method: "stream/event",
+      params: { request_id: handle.requestId, event: { type: "text_delta", delta: "he" } },
+    });
+    t.feed({
+      jsonrpc: "2.0",
+      method: "stream/event",
+      params: { request_id: handle.requestId, event: { type: "text_delta", delta: "llo" } },
+    });
+    await flush();
+    expect(events).toEqual([
+      { type: "text_delta", delta: "he" },
+      { type: "text_delta", delta: "llo" },
+    ]);
+    t.feed({
+      jsonrpc: "2.0",
+      id: handle.requestId,
+      result: { stopped_reason: "completed" },
+    });
+    await expect(handle.done).resolves.toEqual({ stopped_reason: "completed" });
+    await client.exit();
+  });
+
+  it("ignores stream/event notifications for unknown request ids", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    const handle = client.sendMessage("sess-1", userMsg);
+    await flush();
+    const events: unknown[] = [];
+    handle.onEvent((e) => events.push(e));
+    // Stray event targeted at some other inflight request — must not leak.
+    t.feed({
+      jsonrpc: "2.0",
+      method: "stream/event",
+      params: { request_id: 999, event: { type: "x" } },
+    });
+    await flush();
+    expect(events).toEqual([]);
+    t.feed({
+      jsonrpc: "2.0",
+      id: handle.requestId,
+      result: { stopped_reason: "completed" },
+    });
+    await handle.done;
+    await client.exit();
+  });
+
+  it("invokes the permission handler and writes the decision back", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    const handle = client.sendMessage("sess-1", userMsg);
+    await flush();
+    const seen: Array<{ tool: string }> = [];
+    handle.onPermissionRequest((req) => {
+      seen.push({ tool: req.tool });
+      return Promise.resolve({ decision: "allow" });
+    });
+    // Server-initiated permission/request.
+    t.feed({
+      jsonrpc: "2.0",
+      id: -10,
+      method: "permission/request",
+      params: {
+        tool: "bash",
+        tool_args: { cmd: "ls" },
+        session_id: "sess-1",
+        call_id: "c1",
+      },
+    });
+    await flush();
+    expect(seen).toEqual([{ tool: "bash" }]);
+    // The reply is the second frame (the first being session.send_message).
+    expect(t.sent).toHaveLength(2);
+    const reply = decode(t.sent[1]!);
+    expect(reply.id).toBe(-10);
+    expect(reply.result).toEqual({ decision: "allow" });
+    t.feed({
+      jsonrpc: "2.0",
+      id: handle.requestId,
+      result: { stopped_reason: "completed" },
+    });
+    await handle.done;
+    await client.exit();
+  });
+
+  it("defaults permission decisions to deny when no handler is registered", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    const handle = client.sendMessage("sess-1", userMsg);
+    await flush();
+    // Note: no onPermissionRequest registered.
+    t.feed({
+      jsonrpc: "2.0",
+      id: -11,
+      method: "permission/request",
+      params: {
+        tool: "bash",
+        tool_args: {},
+        session_id: "sess-1",
+        call_id: "c1",
+      },
+    });
+    await flush();
+    const reply = decode(t.sent[1]!);
+    expect(reply.id).toBe(-11);
+    expect(reply.result).toEqual({ decision: "deny" });
+    t.feed({
+      jsonrpc: "2.0",
+      id: handle.requestId,
+      result: { stopped_reason: "completed" },
+    });
+    await handle.done;
+    await client.exit();
+  });
+
+  it("cancel() emits a $/cancelRequest notification carrying the requestId", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    const handle = client.sendMessage("sess-1", userMsg);
+    await flush();
+    await handle.cancel();
+    const cancelFrame = decode(t.sent[t.sent.length - 1]!);
+    expect(cancelFrame.method).toBe("$/cancelRequest");
+    expect("id" in cancelFrame).toBe(false); // notification — no id at root
+    expect(cancelFrame.params).toEqual({ id: handle.requestId });
+    // The server's response then surfaces as BridgeCancelled via `done`.
+    t.feed({
+      jsonrpc: "2.0",
+      id: handle.requestId,
+      error: { code: -32002, message: "request cancelled" },
+    });
+    await expect(handle.done).rejects.toBeInstanceOf(BridgeCancelled);
+    await client.exit();
+  });
+
+  it("rejects done with BridgeError on non-cancellation error responses", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    const handle = client.sendMessage("sess-1", userMsg);
+    await flush();
+    t.feed({
+      jsonrpc: "2.0",
+      id: handle.requestId,
+      error: { code: -32603, message: "boom" },
+    });
+    await expect(handle.done).rejects.toMatchObject({
+      name: "BridgeError",
+      code: -32603,
+      message: "boom",
+    });
+    await client.exit();
+  });
+
+  it("rejects done with BridgeDisconnected on transport EOF mid-flight", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    const handle = client.sendMessage("sess-1", userMsg);
+    await flush();
+    t.signalEof();
+    await expect(handle.done).rejects.toBeInstanceOf(BridgeDisconnected);
+  });
+
+  it("uses sequential request ids that interleave with other requests", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    // First, a session.create (id=1).
+    t.feed({
+      jsonrpc: "2.0",
+      id: 1,
+      result: { id: "sess-1", created_at: "2026-01-01T00:00:00" },
+    });
+    await client.sessionCreate();
+    // Then sendMessage should claim id=2.
+    const handle = client.sendMessage("sess-1", userMsg);
+    expect(handle.requestId).toBe(2);
+    t.feed({
+      jsonrpc: "2.0",
+      id: 2,
+      result: { stopped_reason: "completed" },
+    });
+    await handle.done;
     await client.exit();
   });
 });
