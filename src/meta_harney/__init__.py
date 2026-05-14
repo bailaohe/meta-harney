@@ -6,7 +6,7 @@ Phase 7 status: extended-thinking full mode + GitHub Actions CI.
 - AnthropicProvider buffers thinking_delta + signature_delta, emits at content_block_stop
 - Engine appends thinking blocks to assistant Message.content (entering session.messages)
 - OpenAIProvider silently skips thinking blocks (no concept)
-- GitHub repo + Actions CI matrix (Python 3.10/3.11/3.12 × ubuntu/macos)
+- GitHub repo + Actions CI matrix (Python 3.10/3.11/3.12 x ubuntu/macos)
 """
 
 from meta_harney.abstractions import (
