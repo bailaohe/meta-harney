@@ -12,7 +12,9 @@ from typing import Any
 from meta_harney.bridge.errors import (
     BridgeError,
     InternalError,
+    InvalidParams,
     MethodNotFound,
+    SessionNotFound,
     ShuttingDown,
 )
 from meta_harney.bridge.framing import Framing
@@ -56,6 +58,7 @@ class BridgeServer:
         self._write_lock = asyncio.Lock()
         self._inflight: set[asyncio.Task[None]] = set()
         self._register_lifecycle_handlers()
+        self._register_session_handlers()
 
     # ---- handler registration ----
 
@@ -63,6 +66,11 @@ class BridgeServer:
         self._handlers["initialize"] = self._handle_initialize
         self._handlers["shutdown"] = self._handle_shutdown
         self._notification_handlers["exit"] = self._handle_exit
+
+    def _register_session_handlers(self) -> None:
+        self._handlers["session.create"] = self._handle_session_create
+        self._handlers["session.list"] = self._handle_session_list
+        self._handlers["session.load"] = self._handle_session_load
 
     # ---- public entry point ----
 
@@ -206,6 +214,56 @@ class BridgeServer:
 
     async def _handle_exit(self, params: Any) -> None:
         self._exited = True
+
+    # ---- session handlers ----
+
+    async def _handle_session_create(self, params: Any) -> Any:
+        p = params or {}
+        sess = await self._runtime.create_session(
+            session_id=p.get("session_id"),
+            tenant_id=p.get("tenant_id"),
+            user_id=p.get("user_id"),
+            attributes=p.get("attributes"),
+            metadata=p.get("metadata"),
+        )
+        return {"id": sess.id, "created_at": sess.created_at.isoformat()}
+
+    async def _handle_session_list(self, params: Any) -> Any:
+        store = getattr(self._runtime, "_session_store", None)
+        if store is None:
+            raise MethodNotFound("runtime has no session store")
+        p = params or {}
+        sessions = await store.list(tenant_id=p.get("tenant_id"))
+        return [
+            {
+                "id": s.id,
+                "created_at": s.created_at.isoformat(),
+                "message_count": len(s.messages),
+                "last_message_at": (
+                    s.messages[-1].timestamp.isoformat()
+                    if s.messages and hasattr(s.messages[-1], "timestamp")
+                    else None
+                ),
+            }
+            for s in sessions
+        ]
+
+    async def _handle_session_load(self, params: Any) -> Any:
+        p = params or {}
+        sid = p.get("session_id")
+        if not isinstance(sid, str) or not sid:
+            raise InvalidParams("session_id required (string)")
+        store = getattr(self._runtime, "_session_store", None)
+        if store is None:
+            raise SessionNotFound(sid)
+        sess = await store.load(sid, tenant_id=p.get("tenant_id"))
+        if sess is None:
+            raise SessionNotFound(sid)
+        return {
+            "id": sess.id,
+            "created_at": sess.created_at.isoformat(),
+            "messages": [m.model_dump() for m in sess.messages],
+        }
 
 
 def _json_default(o: Any) -> Any:
