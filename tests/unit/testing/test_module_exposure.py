@@ -1,15 +1,18 @@
 """Tests for meta_harney.testing module exposure."""
+
 from __future__ import annotations
 
 
 def test_testing_module_reexports_fake_provider() -> None:
     from meta_harney.testing import FakeLLMProvider, FakeRound
+
     assert FakeLLMProvider
     assert FakeRound
 
 
 def test_testing_module_reexports_runtime_helper() -> None:
     from meta_harney.testing import runtime_for_testing
+
     assert runtime_for_testing
 
 

@@ -400,7 +400,9 @@ async def test_join_timeout_raises_and_cancels_task() -> None:
 
     handle = await backend.spawn(
         spec=AgentSpec(name="x", instructions="y", allowed_tools=[]),
-        initial_message="go", parent_session_id="parent-t1", mode="detached",
+        initial_message="go",
+        parent_session_id="parent-t1",
+        mode="detached",
     )
     with pytest.raises(ChildTimeoutError):
         await backend.join(handle.child_session_id, timeout=0.1)

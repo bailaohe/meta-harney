@@ -3,6 +3,7 @@
 Tests stub the anthropic SDK at the client boundary so they're deterministic
 and don't make network calls.
 """
+
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
@@ -45,9 +46,7 @@ def test_anthropic_provider_requires_api_key() -> None:
 def test_convert_simple_user_message() -> None:
     msgs = [Message(role="user", content=[TextBlock(text="hi")])]
     converted, extracted_system = _convert_messages_to_anthropic(msgs)
-    assert converted == [
-        {"role": "user", "content": [{"type": "text", "text": "hi"}]}
-    ]
+    assert converted == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
     assert extracted_system is None
 
 
@@ -67,10 +66,13 @@ def test_convert_extracts_system_messages() -> None:
 def test_convert_assistant_with_tool_call() -> None:
     msgs = [
         Message(role="user", content=[TextBlock(text="search")]),
-        Message(role="assistant", content=[
-            TextBlock(text="Let me check."),
-            ToolCallBlock(invocation_id="t1", name="search", args={"query": "x"}),
-        ]),
+        Message(
+            role="assistant",
+            content=[
+                TextBlock(text="Let me check."),
+                ToolCallBlock(invocation_id="t1", name="search", args={"query": "x"}),
+            ],
+        ),
     ]
     converted, _ = _convert_messages_to_anthropic(msgs)
     assert converted[1]["role"] == "assistant"
@@ -87,13 +89,16 @@ def test_convert_assistant_with_tool_call() -> None:
 def test_convert_tool_result_message() -> None:
     """Tool-role message converts to user-role with tool_result content."""
     msgs = [
-        Message(role="tool", content=[
-            ToolResultBlock(
-                invocation_id="t1",
-                success=True,
-                output="result text",
-            )
-        ]),
+        Message(
+            role="tool",
+            content=[
+                ToolResultBlock(
+                    invocation_id="t1",
+                    success=True,
+                    output="result text",
+                )
+            ],
+        ),
     ]
     converted, _ = _convert_messages_to_anthropic(msgs)
     assert converted[0]["role"] == "user"
@@ -105,14 +110,17 @@ def test_convert_tool_result_message() -> None:
 
 def test_convert_failed_tool_result_marks_is_error() -> None:
     msgs = [
-        Message(role="tool", content=[
-            ToolResultBlock(
-                invocation_id="t1",
-                success=False,
-                output=None,
-                error="boom",
-            )
-        ]),
+        Message(
+            role="tool",
+            content=[
+                ToolResultBlock(
+                    invocation_id="t1",
+                    success=False,
+                    output=None,
+                    error="boom",
+                )
+            ],
+        ),
     ]
     converted, _ = _convert_messages_to_anthropic(msgs)
     block = converted[0]["content"][0]
@@ -122,9 +130,12 @@ def test_convert_failed_tool_result_marks_is_error() -> None:
 
 def test_convert_image_block() -> None:
     msgs = [
-        Message(role="user", content=[
-            ImageBlock(url="https://x/y.png", media_type="image/png"),
-        ]),
+        Message(
+            role="user",
+            content=[
+                ImageBlock(url="https://x/y.png", media_type="image/png"),
+            ],
+        ),
     ]
     converted, _ = _convert_messages_to_anthropic(msgs)
     block = converted[0]["content"][0]

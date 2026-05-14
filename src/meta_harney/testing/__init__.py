@@ -13,6 +13,7 @@ under a clean test-oriented namespace.
 Business apps test their custom tools/hooks/permission policies via this
 factory without rebuilding the dependency graph each time.
 """
+
 from __future__ import annotations
 
 from meta_harney.abstractions.compaction import CompactionStrategy
@@ -60,9 +61,7 @@ def runtime_for_testing(
             else MinimalPromptBuilder(session_store=store)
         ),
         permission_resolver=(
-            permission_resolver
-            if permission_resolver is not None
-            else AllowAllPermissionResolver()
+            permission_resolver if permission_resolver is not None else AllowAllPermissionResolver()
         ),
         session_store=store,
         trace_sink=trace_sink if trace_sink is not None else NullSink(),

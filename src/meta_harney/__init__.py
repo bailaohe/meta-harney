@@ -49,6 +49,7 @@ from meta_harney.engine.stream_events import (
     TurnCompleted,
 )
 from meta_harney.errors import MetaHarneyError
+from meta_harney.providers.anthropic import AnthropicProvider
 from meta_harney.providers.base import (
     LLMProvider,
     ProviderCallConfig,
@@ -65,13 +66,15 @@ from meta_harney.testing import (
     runtime_for_testing,
 )
 
-__version__ = "0.0.3"
+__version__ = "0.0.4"
 
 __all__ = [
     # runtime facade
     "AgentRuntime",
     # multi-agent
     "AgentSpec",
+    # providers
+    "AnthropicProvider",
     # hook
     "BaseHook",
     # task

@@ -7,6 +7,7 @@ Phase 4 task 6: scaffold + constructor + api_key validation.
 Tasks 7-10 implement message conversion, stream event mapping, tool calls,
 and error classification.
 """
+
 from __future__ import annotations
 
 import json
@@ -149,8 +150,7 @@ class AnthropicProvider:
         final_system = system_prompt
         if extracted_system:
             final_system = (
-                f"{extracted_system}\n\n{system_prompt}"
-                if system_prompt else extracted_system
+                f"{extracted_system}\n\n{system_prompt}" if system_prompt else extracted_system
             )
 
         wire_tools = [
@@ -227,9 +227,7 @@ class AnthropicProvider:
                         stop_reason = raw_stop_reason if raw_stop_reason in known else "end_turn"
                         yield ProviderStreamDone(
                             stop_reason=stop_reason,  # type: ignore[arg-type]
-                            input_tokens=(
-                                getattr(usage, "input_tokens", None) if usage else None
-                            ),
+                            input_tokens=(getattr(usage, "input_tokens", None) if usage else None),
                             output_tokens=(
                                 getattr(usage, "output_tokens", None) if usage else None
                             ),
@@ -245,6 +243,4 @@ class AnthropicProvider:
                 f"anthropic API error (status {status}): {exc}"
             ) from exc
         except APIConnectionError as exc:
-            raise RetryableProviderError(
-                f"anthropic connection error: {exc}"
-            ) from exc
+            raise RetryableProviderError(f"anthropic connection error: {exc}") from exc

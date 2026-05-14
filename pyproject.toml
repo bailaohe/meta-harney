@@ -1,6 +1,6 @@
 [project]
 name = "meta-harney"
-version = "0.0.3"
+version = "0.0.4"
 description = "Domain-agnostic agent runtime SDK — abstractions for tool, hook, permission, prompt, task, session, trace, multi-agent, and compaction."
 readme = "README.md"
 requires-python = ">=3.10"
