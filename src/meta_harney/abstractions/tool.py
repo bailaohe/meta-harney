@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
+    from meta_harney.abstractions.multi_agent import MultiAgentBackend
     from meta_harney.abstractions.session import SessionStore
     from meta_harney.abstractions.trace import TraceSink
 
@@ -47,6 +48,7 @@ class ToolContext:
     trace_sink: TraceSink
     current_span_id: str
     new_span_id: Callable[[], str]
+    multi_agent: MultiAgentBackend | None = None
 
 
 class BaseTool(ABC):

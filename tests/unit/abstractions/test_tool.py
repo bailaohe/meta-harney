@@ -91,3 +91,45 @@ def test_concrete_tool_without_required_classvars_fails():
     t = Broken()
     with pytest.raises(AttributeError):
         _ = t.name
+
+
+def test_tool_context_multi_agent_field_defaults_to_none() -> None:
+    """ToolContext gains optional multi_agent field for child-agent spawning."""
+    import uuid as _uuid
+
+    ctx = ToolContext(
+        session_store=object(),  # type: ignore[arg-type]
+        trace_sink=object(),  # type: ignore[arg-type]
+        current_span_id="x",
+        new_span_id=lambda: _uuid.uuid4().hex[:16],
+    )
+    # New field exists with default None
+    assert ctx.multi_agent is None
+
+
+def test_tool_context_multi_agent_field_accepts_backend() -> None:
+    """When provided, multi_agent is exposed verbatim to tools."""
+    import uuid as _uuid
+
+    class FakeBackend:
+        async def spawn(self, spec, initial_message, parent_session_id, mode="blocking"):
+            raise NotImplementedError
+
+        async def join(self, child_session_id, timeout=None):
+            raise NotImplementedError
+
+        async def status(self, child_session_id):
+            raise NotImplementedError
+
+        async def cancel(self, child_session_id):
+            raise NotImplementedError
+
+    backend = FakeBackend()
+    ctx = ToolContext(
+        session_store=object(),  # type: ignore[arg-type]
+        trace_sink=object(),  # type: ignore[arg-type]
+        current_span_id="x",
+        new_span_id=lambda: _uuid.uuid4().hex[:16],
+        multi_agent=backend,  # type: ignore[arg-type]
+    )
+    assert ctx.multi_agent is backend
