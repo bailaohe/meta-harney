@@ -1,4 +1,5 @@
 """Tests for engine.retry helpers."""
+
 from __future__ import annotations
 
 import pytest
@@ -56,9 +57,7 @@ async def test_retry_with_backoff_gives_up_after_max() -> None:
         raise RetryableProviderError("always fails")
 
     with pytest.raises(RetryableProviderError):
-        await retry_with_backoff(
-            f, RetryConfig(max_attempts=3, initial_delay_s=0.0)
-        )
+        await retry_with_backoff(f, RetryConfig(max_attempts=3, initial_delay_s=0.0))
 
 
 async def test_retry_with_backoff_does_not_retry_nonretryable() -> None:

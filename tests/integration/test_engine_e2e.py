@@ -1,4 +1,5 @@
 """End-to-end engine tests using FakeLLMProvider."""
+
 from __future__ import annotations
 
 import asyncio
@@ -42,9 +43,11 @@ async def test_happy_path_text_only() -> None:
     store = MemorySessionStore()
     await _new_session(store)
 
-    provider = FakeLLMProvider(rounds=[
-        FakeRound(text="Hello!", stop_reason="end_turn"),
-    ])
+    provider = FakeLLMProvider(
+        rounds=[
+            FakeRound(text="Hello!", stop_reason="end_turn"),
+        ]
+    )
 
     builder = MinimalPromptBuilder(session_store=store)
 
@@ -97,17 +100,21 @@ async def test_tool_call_cycle() -> None:
     store = MemorySessionStore()
     await _new_session(store)
 
-    provider = FakeLLMProvider(rounds=[
-        FakeRound(
-            tool_calls=[ProviderToolCall(
-                invocation_id="inv-1",
-                name="echo",
-                args={"text": "world"},
-            )],
-            stop_reason="tool_use",
-        ),
-        FakeRound(text="The echo said 'world'.", stop_reason="end_turn"),
-    ])
+    provider = FakeLLMProvider(
+        rounds=[
+            FakeRound(
+                tool_calls=[
+                    ProviderToolCall(
+                        invocation_id="inv-1",
+                        name="echo",
+                        args={"text": "world"},
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            FakeRound(text="The echo said 'world'.", stop_reason="end_turn"),
+        ]
+    )
 
     builder = MinimalPromptBuilder(session_store=store)
 
@@ -153,17 +160,21 @@ async def test_permission_denied_e2e() -> None:
     store = MemorySessionStore()
     await _new_session(store)
 
-    provider = FakeLLMProvider(rounds=[
-        FakeRound(
-            tool_calls=[ProviderToolCall(
-                invocation_id="inv-1",
-                name="echo",
-                args={"text": "blocked"},
-            )],
-            stop_reason="tool_use",
-        ),
-        FakeRound(text="Sorry, I'm not allowed.", stop_reason="end_turn"),
-    ])
+    provider = FakeLLMProvider(
+        rounds=[
+            FakeRound(
+                tool_calls=[
+                    ProviderToolCall(
+                        invocation_id="inv-1",
+                        name="echo",
+                        args={"text": "blocked"},
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            FakeRound(text="Sorry, I'm not allowed.", stop_reason="end_turn"),
+        ]
+    )
 
     builder = MinimalPromptBuilder(session_store=store)
 
@@ -219,22 +230,33 @@ async def test_hook_firing_all_kinds() -> None:
     store = MemorySessionStore()
     await _new_session(store)
 
-    provider = FakeLLMProvider(rounds=[
-        FakeRound(
-            tool_calls=[ProviderToolCall(
-                invocation_id="i1", name="echo", args={"text": "hi"},
-            )],
-            stop_reason="tool_use",
-        ),
-        FakeRound(text="done", stop_reason="end_turn"),
-    ])
+    provider = FakeLLMProvider(
+        rounds=[
+            FakeRound(
+                tool_calls=[
+                    ProviderToolCall(
+                        invocation_id="i1",
+                        name="echo",
+                        args={"text": "hi"},
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            FakeRound(text="done", stop_reason="end_turn"),
+        ]
+    )
 
-    recorder = _RecordingHook({
-        "session_start", "session_end",
-        "pre_llm", "post_llm",
-        "pre_tool", "post_tool",
-        "turn_complete",
-    })
+    recorder = _RecordingHook(
+        {
+            "session_start",
+            "session_end",
+            "pre_llm",
+            "post_llm",
+            "pre_tool",
+            "post_tool",
+            "turn_complete",
+        }
+    )
 
     async for _ev in run_turn(
         session_id="s1",
@@ -309,13 +331,15 @@ async def test_tool_timeout_e2e() -> None:
     store = MemorySessionStore()
     await _new_session(store)
 
-    provider = FakeLLMProvider(rounds=[
-        FakeRound(
-            tool_calls=[ProviderToolCall(invocation_id="i1", name="slow", args={})],
-            stop_reason="tool_use",
-        ),
-        FakeRound(text="Tool timed out.", stop_reason="end_turn"),
-    ])
+    provider = FakeLLMProvider(
+        rounds=[
+            FakeRound(
+                tool_calls=[ProviderToolCall(invocation_id="i1", name="slow", args={})],
+                stop_reason="tool_use",
+            ),
+            FakeRound(text="Tool timed out.", stop_reason="end_turn"),
+        ]
+    )
 
     events: list[StreamEvent] = []
     async for ev in run_turn(
@@ -353,21 +377,21 @@ async def test_compaction_triggered_e2e() -> None:
     pre_session = await store.load("s1")
     assert pre_session is not None
     for i in range(25):
-        pre_session.messages.append(
-            Message(role="user", content=[TextBlock(text=f"old-{i}")])
-        )
+        pre_session.messages.append(Message(role="user", content=[TextBlock(text=f"old-{i}")]))
         pre_session.messages.append(
             Message(role="assistant", content=[TextBlock(text=f"reply-{i}")])
         )
     await store.save(pre_session)
 
-    provider = FakeLLMProvider(rounds=[
-        FakeRound(
-            tool_calls=[ProviderToolCall(invocation_id="i1", name="echo", args={"text": "x"})],
-            stop_reason="tool_use",
-        ),
-        FakeRound(text="done", stop_reason="end_turn"),
-    ])
+    provider = FakeLLMProvider(
+        rounds=[
+            FakeRound(
+                tool_calls=[ProviderToolCall(invocation_id="i1", name="echo", args={"text": "x"})],
+                stop_reason="tool_use",
+            ),
+            FakeRound(text="done", stop_reason="end_turn"),
+        ]
+    )
 
     # Mock token counter: each message contributes 1000 tokens
     def counter(msgs: list[Message]) -> int:

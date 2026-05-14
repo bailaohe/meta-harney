@@ -4,6 +4,7 @@
 provider — derived from the tool's name, description, and Pydantic
 input_schema.
 """
+
 from __future__ import annotations
 
 from pydantic import BaseModel, Field

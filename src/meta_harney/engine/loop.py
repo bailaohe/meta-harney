@@ -1,4 +1,5 @@
 """Engine main loop: run_turn() orchestrator."""
+
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Callable
@@ -172,11 +173,13 @@ async def run_turn(
             if text_chunks:
                 assistant_blocks.append(TextBlock(text="".join(text_chunks)))
             for tc in tool_calls:
-                assistant_blocks.append(ToolCallBlock(
-                    invocation_id=tc.invocation_id,
-                    name=tc.name,
-                    args=tc.args,
-                ))
+                assistant_blocks.append(
+                    ToolCallBlock(
+                        invocation_id=tc.invocation_id,
+                        name=tc.name,
+                        args=tc.args,
+                    )
+                )
             session.messages.append(Message(role="assistant", content=assistant_blocks))
 
             # Fire post_llm hook
@@ -242,12 +245,14 @@ async def run_turn(
                         parent_span_id=turn_span,
                     )
 
-                tool_result_blocks.append(ToolResultBlock(
-                    invocation_id=inv.invocation_id,
-                    success=result.success,
-                    output=result.output,
-                    error=result.error,
-                ))
+                tool_result_blocks.append(
+                    ToolResultBlock(
+                        invocation_id=inv.invocation_id,
+                        success=result.success,
+                        output=result.output,
+                        error=result.error,
+                    )
+                )
                 yield ToolCallCompleted(
                     tool_name=tc.name,
                     invocation_id=tc.invocation_id,
@@ -259,10 +264,7 @@ async def run_turn(
             iteration += 1
 
             # Compaction check after each tool iteration
-            if (
-                compaction is not None
-                and config.compaction_trigger_tokens is not None
-            ):
+            if compaction is not None and config.compaction_trigger_tokens is not None:
                 current_tokens = counter(session.messages)
                 if current_tokens > config.compaction_trigger_tokens:
                     should = await compaction.should_compact(

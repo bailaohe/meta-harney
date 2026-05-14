@@ -4,6 +4,7 @@ Provider implementations (Anthropic, OpenAI, etc.) plug in here. The engine
 calls `provider.stream(...)` once per LLM round and consumes the async
 iterator of ProviderStreamEvent until ProviderStreamDone is yielded.
 """
+
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator

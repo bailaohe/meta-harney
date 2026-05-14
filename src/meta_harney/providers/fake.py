@@ -5,6 +5,7 @@ emit text (optionally chunked via split_on), tool calls, or both, followed
 by a stop_reason. The provider records all calls in `provider.calls` for
 test assertions.
 """
+
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator

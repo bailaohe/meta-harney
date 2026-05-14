@@ -1,4 +1,5 @@
 """Tests for tool dispatch helper."""
+
 from __future__ import annotations
 
 import asyncio
@@ -127,6 +128,7 @@ async def test_execute_tool_timeout() -> None:
 async def test_execute_tool_pre_hook_can_transform_args() -> None:
     class _OverrideArgs(BaseHook):
         subscribed_events: ClassVar[set[HookEventKind]] = {"pre_tool"}
+
         async def handle(self, event: HookEvent) -> HookDecision:
             return HookDecision(transform={"args": {"text": "OVERRIDE"}})
 
@@ -149,6 +151,7 @@ async def test_execute_tool_pre_hook_can_transform_args() -> None:
 async def test_execute_tool_pre_hook_deny() -> None:
     class _Block(BaseHook):
         subscribed_events: ClassVar[set[HookEventKind]] = {"pre_tool"}
+
         async def handle(self, event: HookEvent) -> HookDecision:
             return HookDecision(allow=False, reason="hook-blocked")
 
@@ -172,9 +175,7 @@ async def test_execute_tool_permission_ask_is_treated_as_deny() -> None:
     from meta_harney.abstractions.permission import PermissionDecision
 
     class _AskResolver:
-        async def resolve(
-            self, invocation, session_id: str
-        ) -> PermissionDecision:
+        async def resolve(self, invocation, session_id: str) -> PermissionDecision:
             return PermissionDecision(verdict="ask", reason="needs manager approval")
 
     ctx = _make_ctx()

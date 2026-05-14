@@ -1,10 +1,12 @@
 """Tests for FakeLLMProvider — scripted responses for engine tests."""
+
 from __future__ import annotations
 
 import pytest
 
 from meta_harney.abstractions._types import Message, TextBlock
 from meta_harney.providers.base import (
+    LLMProvider,
     ProviderCallConfig,
     ProviderStreamDone,
     ProviderStreamEvent,
@@ -12,6 +14,7 @@ from meta_harney.providers.base import (
     ProviderToolCall,
 )
 from meta_harney.providers.fake import FakeLLMProvider, FakeRound
+from tests.contracts.llm_provider import LLMProviderContract
 
 
 async def _drain(provider: FakeLLMProvider, **kwargs: object) -> list[ProviderStreamEvent]:
@@ -27,9 +30,7 @@ async def _drain(provider: FakeLLMProvider, **kwargs: object) -> list[ProviderSt
 
 
 async def test_single_text_round() -> None:
-    provider = FakeLLMProvider(
-        rounds=[FakeRound(text="Hello, world!", stop_reason="end_turn")]
-    )
+    provider = FakeLLMProvider(rounds=[FakeRound(text="Hello, world!", stop_reason="end_turn")])
     events = await _drain(provider)
     assert len(events) == 2
     assert isinstance(events[0], ProviderTextDelta)
@@ -95,12 +96,6 @@ async def test_records_calls() -> None:
     assert provider.calls[0].messages == msgs
 
 
-from meta_harney.providers.base import LLMProvider as _LLMProvider
-from tests.contracts.llm_provider import LLMProviderContract
-
-
 class TestFakeLLMProviderContract(LLMProviderContract):
-    def make_provider(self) -> _LLMProvider:
-        return FakeLLMProvider(
-            rounds=[FakeRound(text="ok", stop_reason="end_turn")]
-        )
+    def make_provider(self) -> LLMProvider:
+        return FakeLLMProvider(rounds=[FakeRound(text="ok", stop_reason="end_turn")])

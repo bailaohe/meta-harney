@@ -1,4 +1,5 @@
 """Tests for hook dispatch helpers."""
+
 from __future__ import annotations
 
 from typing import ClassVar
@@ -49,6 +50,7 @@ class _RaiseHook(BaseHook):
 async def test_dispatch_skips_non_subscribed() -> None:
     class _SessionHook(BaseHook):
         subscribed_events: ClassVar[set[HookEventKind]] = {"session_start"}
+
         async def handle(self, event: HookEvent) -> HookDecision:
             return HookDecision(allow=False)
 
@@ -106,8 +108,10 @@ async def test_dispatch_transform_pre_event_returned() -> None:
 
 async def test_dispatch_transform_on_post_ignored() -> None:
     """transform on post_* is ignored per spec (engine warns via trace)."""
+
     class _PostTransform(BaseHook):
         subscribed_events: ClassVar[set[HookEventKind]] = {"post_tool"}
+
         async def handle(self, event: HookEvent) -> HookDecision:
             return HookDecision(transform={"foo": "bar"})
 

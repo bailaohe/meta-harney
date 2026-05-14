@@ -13,6 +13,7 @@ Six kinds:
 - iteration_completed: one LLM-round + optional tool-batch is done
 - turn_completed: the whole agent turn is done
 """
+
 from __future__ import annotations
 
 from typing import Any, Literal

@@ -4,6 +4,7 @@ The engine wraps `provider.stream()` calls in `retry_with_backoff(...)`.
 Only RetryableProviderError triggers retry; NonRetryableProviderError
 propagates immediately (per spec §7.2).
 """
+
 from __future__ import annotations
 
 import asyncio

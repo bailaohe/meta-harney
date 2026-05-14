@@ -3,6 +3,7 @@
 The engine uses these directly; tools/hooks receive `current_span_id` and a
 `new_span_id` callable via ToolContext to emit their own child spans.
 """
+
 from __future__ import annotations
 
 import sys
@@ -46,7 +47,6 @@ async def emit_event(
         await sink.emit(event)
     except Exception as exc:
         print(
-            f"[meta_harney] trace sink failed for kind={kind!r}: "
-            f"{type(exc).__name__}: {exc}",
+            f"[meta_harney] trace sink failed for kind={kind!r}: {type(exc).__name__}: {exc}",
             file=sys.stderr,
         )

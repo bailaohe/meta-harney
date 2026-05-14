@@ -6,6 +6,7 @@ Filters subscribed hooks, dispatches in order, merges decisions:
 - Other exceptions are logged to trace and execution continues (fail-open)
 - `transform` is only honored on pre_* events; ignored on post_* events
 """
+
 from __future__ import annotations
 
 from typing import Any

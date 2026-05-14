@@ -1,4 +1,5 @@
 """Tests for engine.tracing helpers."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -46,6 +47,7 @@ async def test_emit_event_calls_sink() -> None:
 
 async def test_emit_event_swallows_sink_exceptions() -> None:
     """Sink exceptions MUST NOT propagate — observability shouldn't kill business."""
+
     class BrokenSink:
         async def emit(self, event: TraceEvent) -> None:
             raise RuntimeError("kaboom")

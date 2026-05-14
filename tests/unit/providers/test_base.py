@@ -1,4 +1,5 @@
 """Tests for LLMProvider Protocol + ProviderStreamEvent + ToolSpec."""
+
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator

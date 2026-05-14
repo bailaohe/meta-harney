@@ -1,4 +1,5 @@
 """Tests for engine StreamEvent types (the engine-level event stream emitted to callers)."""
+
 from __future__ import annotations
 
 from meta_harney.abstractions.tool import ToolResult

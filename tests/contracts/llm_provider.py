@@ -1,4 +1,5 @@
 """Contract tests for LLMProvider implementations."""
+
 from __future__ import annotations
 
 from abc import abstractmethod

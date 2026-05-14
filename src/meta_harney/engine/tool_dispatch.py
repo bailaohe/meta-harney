@@ -9,6 +9,7 @@ Wraps a single ToolInvocation execution with:
 
 Returns a ToolResult — never raises (except HookHaltError, which propagates).
 """
+
 from __future__ import annotations
 
 import asyncio
