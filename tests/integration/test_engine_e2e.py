@@ -12,9 +12,11 @@ from pydantic import BaseModel
 
 from meta_harney.abstractions._types import Message, TextBlock
 from meta_harney.abstractions.hook import BaseHook, HookDecision, HookEvent, HookEventKind
+from meta_harney.abstractions.multi_agent import AgentSpec as _AgentSpec
 from meta_harney.abstractions.session import Session
 from meta_harney.abstractions.tool import BaseTool, ToolContext, ToolInvocation, ToolResult
 from meta_harney.builtin.compaction.summarization import SummarizationCompactor
+from meta_harney.builtin.multi_agent.in_process import InProcessMultiAgentBackend
 from meta_harney.builtin.permission.allow_all import AllowAllPermissionResolver
 from meta_harney.builtin.permission.deny_all import DenyAllPermissionResolver
 from meta_harney.builtin.prompt.minimal import MinimalPromptBuilder
@@ -733,3 +735,90 @@ async def test_runtime_drives_full_turn_e2e() -> None:
     assert loaded is not None
     assert loaded.tenant_id == "acme"
     assert len(loaded.messages) == 4
+
+
+class _DelegateInput(BaseModel):
+    question: str
+
+
+class _DelegateTool(BaseTool):
+    """Spawns a child agent to handle a sub-question, returns its output."""
+
+    name: ClassVar[str] = "delegate_to_helper"
+    description: ClassVar[str] = "Delegate to a helper agent."
+    input_schema: ClassVar[type[BaseModel]] = _DelegateInput
+
+    async def execute(self, inv: ToolInvocation, ctx: ToolContext) -> ToolResult:
+        if ctx.multi_agent is None:
+            return ToolResult(success=False, error="multi-agent not configured")
+        spec = _AgentSpec(
+            name="helper",
+            instructions="You are a focused helper agent.",
+            allowed_tools=[],
+        )
+        question = inv.args.get("question", "")
+        handle = await ctx.multi_agent.spawn(
+            spec=spec,
+            initial_message=question,
+            parent_session_id=inv.session_id,
+            mode="blocking",
+        )
+        result = await ctx.multi_agent.join(handle.child_session_id)
+        return ToolResult(
+            success=True,
+            output={"child_session_id": handle.child_session_id, "answer": str(result.output)},
+        )
+
+
+async def test_e2e_parent_spawns_blocking_child() -> None:
+    """Parent agent calls delegate_to_helper tool → child agent runs → result returns."""
+    store = MemorySessionStore()
+
+    parent_provider = FakeLLMProvider(rounds=[
+        FakeRound(
+            tool_calls=[ProviderToolCall(
+                invocation_id="i1",
+                name="delegate_to_helper",
+                args={"question": "what is 2+2?"},
+            )],
+            stop_reason="tool_use",
+        ),
+        FakeRound(text="The helper says 4.", stop_reason="end_turn"),
+    ])
+
+    child_provider = FakeLLMProvider(rounds=[
+        FakeRound(text="4", stop_reason="end_turn"),
+    ])
+
+    backend = InProcessMultiAgentBackend(
+        provider=child_provider,
+        permission_resolver=AllowAllPermissionResolver(),
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="child-model"),
+        all_tools={},
+        hooks=[],
+    )
+
+    rt = AgentRuntime(
+        provider=parent_provider,
+        prompt_builder=MinimalPromptBuilder(session_store=store),
+        permission_resolver=AllowAllPermissionResolver(),
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="parent-model"),
+        tools={"delegate_to_helper": _DelegateTool()},
+        multi_agent=backend,
+    )
+
+    session = await rt.create_session(tenant_id="acme")
+    final = await rt.invoke(session.id, "ask the helper")
+
+    assert isinstance(final.content[0], TextBlock)
+    assert "helper says 4" in final.content[0].text.lower()
+
+    # Verify a child session exists with parent linkage
+    all_sessions = await store.list()
+    children = [s for s in all_sessions if s.parent_session_id == session.id]
+    assert len(children) == 1
+    assert children[0].tenant_id == "acme"  # tenant inherited
