@@ -4,9 +4,9 @@
 > permissions, prompts, sessions, tracing, and multi-agent coordination —
 > with no assumptions about your business domain.
 
+[![CI](https://github.com/bailaohe/meta-harney/actions/workflows/ci.yml/badge.svg)](https://github.com/bailaohe/meta-harney/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen)](#testing-your-agent)
 
 ## Why meta-harney?
 

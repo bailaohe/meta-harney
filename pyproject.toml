@@ -12,6 +12,11 @@ dependencies = [
     "pydantic>=2.5",
 ]
 
+[project.urls]
+Homepage = "https://github.com/bailaohe/meta-harney"
+Repository = "https://github.com/bailaohe/meta-harney"
+Issues = "https://github.com/bailaohe/meta-harney/issues"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
