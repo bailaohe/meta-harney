@@ -59,6 +59,11 @@ from meta_harney.providers.base import (
     ToolSpec,
 )
 from meta_harney.runtime import AgentRuntime
+from meta_harney.testing import (
+    FakeLLMProvider,
+    FakeRound,
+    runtime_for_testing,
+)
 
 __version__ = "0.0.3"
 
@@ -77,6 +82,9 @@ __all__ = [
     "CompactionStrategy",
     # data contracts
     "ContentBlock",
+    # testing
+    "FakeLLMProvider",
+    "FakeRound",
     "HookDecision",
     "HookEvent",
     "HookEventKind",
@@ -131,5 +139,6 @@ __all__ = [
     "__version__",
     # engine entry point
     "run_turn",
+    "runtime_for_testing",
     "tool_to_spec",
 ]
