@@ -5,7 +5,7 @@ See docs/superpowers/specs/2026-05-13-meta-harney-design.md §4.1.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -41,7 +41,38 @@ class ToolResultBlock(_ContentBlockBase):
     error: str | None = None
 
 
-ContentBlock = TextBlock | ImageBlock | ToolCallBlock | ToolResultBlock
+class ThinkingBlock(_ContentBlockBase):
+    """Anthropic extended-thinking content, fully persisted.
+
+    Carried in assistant Message.content to round-trip back to the provider
+    on subsequent turns. Required for Anthropic's thinking-continuity check
+    when extended thinking + tool_use is enabled.
+    """
+
+    type: Literal["thinking"] = "thinking"
+    text: str
+    signature: str
+
+
+class RedactedThinkingBlock(_ContentBlockBase):
+    """Opaque encrypted thinking payload from Anthropic.
+
+    `data` is treated as a black box: we never decrypt, only round-trip.
+    """
+
+    type: Literal["redacted_thinking"] = "redacted_thinking"
+    data: str
+
+
+ContentBlock = Annotated[
+    TextBlock
+    | ImageBlock
+    | ToolCallBlock
+    | ToolResultBlock
+    | ThinkingBlock
+    | RedactedThinkingBlock,
+    Field(discriminator="type"),
+]
 
 
 class Message(BaseModel):

@@ -76,3 +76,59 @@ def test_message_mixed_content():
     assert len(m.content) == 2
     assert m.content[0].type == "text"
     assert m.content[1].type == "tool_call"
+
+
+def test_thinking_block_construction() -> None:
+    from meta_harney.abstractions._types import ThinkingBlock
+
+    b = ThinkingBlock(text="reasoning", signature="sig-abc")
+    assert b.type == "thinking"
+    assert b.text == "reasoning"
+    assert b.signature == "sig-abc"
+
+
+def test_redacted_thinking_block_construction() -> None:
+    from meta_harney.abstractions._types import RedactedThinkingBlock
+
+    b = RedactedThinkingBlock(data="opaque-blob")
+    assert b.type == "redacted_thinking"
+    assert b.data == "opaque-blob"
+
+
+def test_message_with_thinking_blocks_json_roundtrip() -> None:
+    """Discriminated union must reconstruct concrete subclasses from JSON."""
+    from meta_harney.abstractions._types import (
+        Message,
+        RedactedThinkingBlock,
+        TextBlock,
+        ThinkingBlock,
+    )
+
+    msg = Message(
+        role="assistant",
+        content=[
+            ThinkingBlock(text="r", signature="s"),
+            RedactedThinkingBlock(data="d"),
+            TextBlock(text="final"),
+        ],
+    )
+    j = msg.model_dump_json()
+    parsed = Message.model_validate_json(j)
+    assert isinstance(parsed.content[0], ThinkingBlock)
+    assert parsed.content[0].signature == "s"
+    assert isinstance(parsed.content[1], RedactedThinkingBlock)
+    assert parsed.content[1].data == "d"
+    assert isinstance(parsed.content[2], TextBlock)
+    assert parsed.content[2].text == "final"
+
+
+def test_content_block_discriminator_rejects_unknown_type() -> None:
+    """Validation must fail when 'type' is not in the discriminator set."""
+    import pytest
+    from pydantic import ValidationError
+
+    from meta_harney.abstractions._types import Message
+
+    bad_json = '{"role":"assistant","content":[{"type":"unknown","whatever":1}]}'
+    with pytest.raises(ValidationError):
+        Message.model_validate_json(bad_json)

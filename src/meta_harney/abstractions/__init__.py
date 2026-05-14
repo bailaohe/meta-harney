@@ -7,7 +7,9 @@ from meta_harney.abstractions._types import (
     ContentBlock,
     ImageBlock,
     Message,
+    RedactedThinkingBlock,
     TextBlock,
+    ThinkingBlock,
     ToolCallBlock,
     ToolResultBlock,
 )
@@ -62,12 +64,14 @@ __all__ = [
     "PermissionResolver",
     # prompt
     "PromptBuilder",
+    "RedactedThinkingBlock",
     # session
     "Session",
     "SessionStore",
     "SpawnHandle",
     "TaskState",
     "TextBlock",
+    "ThinkingBlock",
     "ToolCallBlock",
     "ToolContext",
     "ToolInvocation",
