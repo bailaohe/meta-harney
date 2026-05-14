@@ -9,9 +9,11 @@ wired in (Phase 3 Task 11) so tools can spawn child agents.
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from typing import Any
 
+from meta_harney.abstractions._types import Message
 from meta_harney.abstractions.compaction import CompactionStrategy
 from meta_harney.abstractions.hook import BaseHook
 from meta_harney.abstractions.multi_agent import MultiAgentBackend
@@ -22,6 +24,7 @@ from meta_harney.abstractions.tool import BaseTool
 from meta_harney.abstractions.trace import TraceSink
 from meta_harney.engine.config import RuntimeConfig
 from meta_harney.engine.loop import TokenCounter
+from meta_harney.engine.stream_events import StreamEvent
 from meta_harney.errors import SessionConflictError
 from meta_harney.providers.base import LLMProvider
 
@@ -92,3 +95,58 @@ class AgentRuntime:
         )
         await self._session_store.save(s)
         return s
+
+    async def stream(
+        self,
+        session_id: str,
+        message: Message | str,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Run one turn, yielding StreamEvents.
+
+        `message` may be a string (wrapped as user TextBlock) or a full Message.
+        """
+        from meta_harney.abstractions._types import TextBlock as _TB
+
+        if isinstance(message, str):
+            user_msg = Message(role="user", content=[_TB(text=message)])
+        else:
+            user_msg = message
+
+        from meta_harney.engine.loop import run_turn as _run_turn
+
+        async for ev in _run_turn(
+            session_id=session_id,
+            user_message=user_msg,
+            provider=self._provider,
+            prompt_builder=self._prompt_builder,
+            permission_resolver=self._permission_resolver,
+            tools=self._tools,
+            hooks=self._hooks,
+            session_store=self._session_store,
+            trace_sink=self._trace_sink,
+            config=self._config,
+            compaction=self._compaction,
+            token_counter=self._token_counter,
+        ):
+            yield ev
+
+    async def invoke(
+        self,
+        session_id: str,
+        message: Message | str,
+    ) -> Message:
+        """Run one turn, return the final assistant message.
+
+        Convenience wrapper around stream(): drains events, then loads the
+        session and returns the last assistant message.
+        """
+        async for _ev in self.stream(session_id, message):
+            pass
+        s = await self._session_store.load(session_id)
+        assert s is not None, "session unexpectedly missing after invoke"
+        # Return the last assistant message
+        for m in reversed(s.messages):
+            if m.role == "assistant":
+                return m
+        # No assistant message: return an empty one (edge case)
+        return Message(role="assistant", content=[])
