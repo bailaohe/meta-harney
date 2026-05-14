@@ -1040,3 +1040,71 @@ async def test_multi_turn_session_e2e() -> None:
     assert "assistant" in second_call_roles
     # And the second turn's user message ("And then double it?") is also there
     assert second_call_roles.count("user") >= 2
+
+
+async def test_thinking_plus_tool_use_multi_turn_persistence_e2e() -> None:
+    """End-to-end: thinking_blocks persist to session.messages and get
+    round-tripped to the provider on the next turn (Phase 7 full mode)."""
+    from meta_harney.abstractions._types import ThinkingBlock
+    from meta_harney.testing import FakeRound, runtime_for_testing
+
+    class _LookupInput(BaseModel):
+        q: str
+
+    class LookupTool(BaseTool):
+        name = "lookup"
+        description = "Look something up."
+        input_schema = _LookupInput
+
+        async def execute(
+            self, inv: ToolInvocation, ctx: ToolContext
+        ) -> ToolResult:
+            return ToolResult(success=True, output={"answer": 42})
+
+    rounds = [
+        FakeRound(
+            thinking_blocks=[
+                ThinkingBlock(text="let me check the DB", signature="sig1"),
+            ],
+            tool_calls=[
+                ProviderToolCall(
+                    invocation_id="t1",
+                    name="lookup",
+                    args={"q": "ultimate answer"},
+                ),
+            ],
+            stop_reason="tool_use",
+        ),
+        FakeRound(text="The answer is 42.", stop_reason="end_turn"),
+    ]
+    provider = FakeLLMProvider(rounds=rounds)
+    rt = runtime_for_testing(scripted_rounds=rounds, tools={"lookup": LookupTool()})
+    rt._provider = provider
+
+    session = await rt.create_session()
+    final = await rt.invoke(session.id, "What is the ultimate answer?")
+    assert "42" in final.content[0].text  # type: ignore[union-attr]
+
+    # session.messages role sequence:
+    # [user, assistant(thinking + tool_call), tool(result), assistant(final text)]
+    refreshed = await rt._session_store.load(session.id)
+    assert refreshed is not None
+    roles = [m.role for m in refreshed.messages]
+    assert roles == ["user", "assistant", "tool", "assistant"]
+
+    # First assistant message has ThinkingBlock (signature preserved)
+    first_assistant = refreshed.messages[1]
+    thinking_in_msg = [
+        b for b in first_assistant.content if isinstance(b, ThinkingBlock)
+    ]
+    assert len(thinking_in_msg) == 1
+    assert thinking_in_msg[0].text == "let me check the DB"
+    assert thinking_in_msg[0].signature == "sig1"
+
+    # Second provider.calls receives the first turn's ThinkingBlock
+    assert len(provider.calls) == 2
+    second_call_msgs = provider.calls[1].messages
+    assistant_msgs = [m for m in second_call_msgs if m.role == "assistant"]
+    assert any(
+        any(isinstance(b, ThinkingBlock) for b in m.content) for m in assistant_msgs
+    ), "second turn should include ThinkingBlock in history"
