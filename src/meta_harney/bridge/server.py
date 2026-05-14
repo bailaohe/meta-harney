@@ -12,6 +12,7 @@ from typing import Any
 
 from meta_harney.bridge.errors import (
     BridgeError,
+    Cancelled,
     InternalError,
     InvalidParams,
     MethodNotFound,
@@ -58,9 +59,14 @@ class BridgeServer:
         self._writer: asyncio.StreamWriter | None = None
         self._write_lock = asyncio.Lock()
         self._inflight: set[asyncio.Task[None]] = set()
+        # Map JSON-RPC request id -> dispatch task, so cancel handlers can target
+        # a specific in-flight request. Distinct from `_inflight` (used only for
+        # graceful drain on EOF). Populated by `_dispatch_request`.
+        self._inflight_by_request_id: dict[Any, asyncio.Task[Any]] = {}
         self._register_lifecycle_handlers()
         self._register_session_handlers()
         self._register_stream_handlers()
+        self._register_cancel_handlers()
 
     # ---- handler registration ----
 
@@ -76,6 +82,12 @@ class BridgeServer:
 
     def _register_stream_handlers(self) -> None:
         self._handlers["session.send_message"] = self._handle_session_send_message
+
+    def _register_cancel_handlers(self) -> None:
+        # session.cancel: request — returns {"cancelled": bool}
+        # $/cancelRequest: LSP-style notification — no response
+        self._handlers["session.cancel"] = self._handle_session_cancel
+        self._notification_handlers["$/cancelRequest"] = self._handle_cancel_notification
 
     # ---- public entry point ----
 
@@ -151,10 +163,25 @@ class BridgeServer:
         if handler is None:
             await self._send_error(req.id, MethodNotFound(req.method))
             return
+
+        # Register this dispatch task under its JSON-RPC id so cancel handlers
+        # ($/cancelRequest, session.cancel) can target it. We use current_task()
+        # because `_spawn` wraps this coroutine in a Task.
+        current = asyncio.current_task()
+        if current is not None and req.id is not None:
+            self._inflight_by_request_id[req.id] = current
+
         token = _current_request_id.set(req.id)
         try:
             try:
                 result = await handler(req.params)
+            except asyncio.CancelledError:
+                # A cancel handler called task.cancel() on us. Translate to a
+                # well-formed Cancelled JSON-RPC error response so the parent
+                # doesn't hang. Do NOT re-raise — that would propagate to the
+                # serve() loop and look like a 500.
+                await self._send_error(req.id, Cancelled("request cancelled by client"))
+                return
             except BridgeError as exc:
                 await self._send_error(req.id, exc)
             except Exception as exc:
@@ -165,6 +192,8 @@ class BridgeServer:
                 await self._send_response(req.id, result)
         finally:
             _current_request_id.reset(token)
+            if req.id is not None:
+                self._inflight_by_request_id.pop(req.id, None)
 
     async def _dispatch_notification(self, note: JsonRpcNotification) -> None:
         handler = self._notification_handlers.get(note.method)
@@ -288,6 +317,34 @@ class BridgeServer:
                 {"request_id": request_id, "event": _serialize_event(event)},
             )
         return {"stopped_reason": stop_reason}
+
+    # ---- cancel handlers ----
+
+    async def _handle_session_cancel(self, params: Any) -> Any:
+        """Request handler — returns {"cancelled": bool}.
+
+        Unknown request_id is NOT an error; it returns {"cancelled": false} so
+        clients can fire-and-forget cancels without racing against completion.
+        """
+        p = params or {}
+        rid = p.get("request_id")
+        if rid is None:
+            raise InvalidParams("request_id required")
+        task = self._inflight_by_request_id.get(rid)
+        if task is None or task.done():
+            return {"cancelled": False}
+        task.cancel()
+        return {"cancelled": True}
+
+    async def _handle_cancel_notification(self, params: Any) -> None:
+        """Notification handler for `$/cancelRequest` (LSP-style)."""
+        p = params or {}
+        rid = p.get("id")
+        if rid is None:
+            return
+        task = self._inflight_by_request_id.get(rid)
+        if task is not None and not task.done():
+            task.cancel()
 
     async def _handle_session_load(self, params: Any) -> Any:
         p = params or {}
