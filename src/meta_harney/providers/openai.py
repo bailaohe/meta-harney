@@ -121,6 +121,25 @@ def _convert_messages_to_openai(
     return out
 
 
+def _convert_tools_to_openai(tools: list[ToolSpec]) -> list[dict[str, Any]]:
+    """Convert ToolSpec list to OpenAI tools array.
+
+    Maps ToolSpec to OpenAI function definition format:
+    {"type": "function", "function": {"name": ..., "description": ..., "parameters": ...}}
+    """
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t.name,
+                "description": t.description,
+                "parameters": t.input_schema,
+            },
+        }
+        for t in tools
+    ]
+
+
 class OpenAIProvider:
     """LLMProvider implementation using the openai SDK."""
 

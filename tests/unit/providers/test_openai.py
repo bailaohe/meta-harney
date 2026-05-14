@@ -10,7 +10,12 @@ from meta_harney.abstractions._types import (
     ToolCallBlock,
     ToolResultBlock,
 )
-from meta_harney.providers.openai import OpenAIProvider, _convert_messages_to_openai
+from meta_harney.providers.base import ToolSpec
+from meta_harney.providers.openai import (
+    OpenAIProvider,
+    _convert_messages_to_openai,
+    _convert_tools_to_openai,
+)
 
 
 def test_openai_provider_constructs() -> None:
@@ -132,3 +137,26 @@ def test_convert_image_block_base64() -> None:
     content = converted[0]["content"]
     assert content[0]["type"] == "image_url"
     assert content[0]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_convert_tools_to_openai_basic() -> None:
+    tools = [
+        ToolSpec(
+            name="echo",
+            description="Echoes input",
+            input_schema={"type": "object", "properties": {"text": {"type": "string"}}},
+        ),
+    ]
+    converted = _convert_tools_to_openai(tools)
+    assert converted == [{
+        "type": "function",
+        "function": {
+            "name": "echo",
+            "description": "Echoes input",
+            "parameters": {"type": "object", "properties": {"text": {"type": "string"}}},
+        },
+    }]
+
+
+def test_convert_empty_tools() -> None:
+    assert _convert_tools_to_openai([]) == []
