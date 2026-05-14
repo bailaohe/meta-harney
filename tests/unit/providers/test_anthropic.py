@@ -144,6 +144,24 @@ def test_convert_image_block() -> None:
     assert block["source"]["url"] == "https://x/y.png"
 
 
+def test_convert_image_block_base64() -> None:
+    """ImageBlock with base64 data converts to source.type='base64'."""
+    msgs = [
+        Message(
+            role="user",
+            content=[
+                ImageBlock(data="iVBORw0KGgo...", media_type="image/png"),
+            ],
+        ),
+    ]
+    converted, _ = _convert_messages_to_anthropic(msgs)
+    block = converted[0]["content"][0]
+    assert block["type"] == "image"
+    assert block["source"]["type"] == "base64"
+    assert block["source"]["media_type"] == "image/png"
+    assert block["source"]["data"] == "iVBORw0KGgo..."
+
+
 class _FakeAnthropicStream:
     """Mimics anthropic SDK's stream context manager."""
 
@@ -381,43 +399,38 @@ async def test_anthropic_401_maps_to_non_retryable() -> None:
 
 
 class TestAnthropicProviderContract(LLMProviderContract):
-    """AnthropicProvider passes the standard LLMProvider contract.
+    """AnthropicProvider passes the standard LLMProvider contract."""
 
-    Tests use a mocked anthropic SDK client returning a single text round.
-    A new mock is set up per `make_provider()` call so the contract suite's
-    repeated invocations don't share state.
-    """
+    @pytest.fixture(autouse=True)
+    def _stub_anthropic_client(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Replace AsyncAnthropic with a mock for the duration of each test."""
 
-    def make_provider(self):
-        text_block = _make_event(
-            "content_block_delta",
-            index=0,
-            delta=_make_event("text_delta", text="ok"),
-        )
-        message_stop = _make_event(
-            "message_stop",
-            message=_make_event(
-                "message",
-                stop_reason="end_turn",
-                usage=_make_event("usage", input_tokens=1, output_tokens=1),
-            ),
-        )
+        def _factory() -> MagicMock:
+            text_block = _make_event(
+                "content_block_delta",
+                index=0,
+                delta=_make_event("text_delta", text="ok"),
+            )
+            message_stop = _make_event(
+                "message_stop",
+                message=_make_event(
+                    "message",
+                    stop_reason="end_turn",
+                    usage=_make_event("usage", input_tokens=1, output_tokens=1),
+                ),
+            )
+            fake_messages_client = MagicMock()
+            fake_messages_client.stream = MagicMock(
+                return_value=_FakeAnthropicStream([text_block, message_stop])
+            )
+            fake_client = MagicMock()
+            fake_client.messages = fake_messages_client
+            return fake_client
 
-        fake_messages_client = MagicMock()
-        fake_messages_client.stream = MagicMock(
-            return_value=_FakeAnthropicStream([text_block, message_stop])
-        )
-        fake_client = MagicMock()
-        fake_client.messages = fake_messages_client
-
-        # Patch AsyncAnthropic at module level so AnthropicProvider's __init__
-        # picks up the mock. The patcher is started but not explicitly stopped
-        # — each contract test instantiates a fresh test class, and the
-        # provider is only used within the test scope.
-        patcher = patch(
+        monkeypatch.setattr(
             "meta_harney.providers.anthropic.AsyncAnthropic",
-            return_value=fake_client,
+            lambda **kwargs: _factory(),
         )
-        patcher.start()
 
+    def make_provider(self) -> AnthropicProvider:
         return AnthropicProvider(api_key="test-contract")

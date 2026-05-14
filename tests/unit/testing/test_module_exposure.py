@@ -6,14 +6,14 @@ from __future__ import annotations
 def test_testing_module_reexports_fake_provider() -> None:
     from meta_harney.testing import FakeLLMProvider, FakeRound
 
-    assert FakeLLMProvider
-    assert FakeRound
+    assert FakeLLMProvider is not None
+    assert FakeRound is not None
 
 
 def test_testing_module_reexports_runtime_helper() -> None:
     from meta_harney.testing import runtime_for_testing
 
-    assert runtime_for_testing
+    assert runtime_for_testing is not None
 
 
 def test_runtime_for_testing_returns_agentruntime() -> None:

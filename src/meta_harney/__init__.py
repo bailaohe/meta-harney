@@ -1,9 +1,17 @@
 """meta_harney — domain-agnostic agent runtime SDK.
 
-Phase 3 status: AgentRuntime facade and InProcessMultiAgentBackend added.
-Runtime config, streaming event types, retry policy, and LLMProvider Protocol
-are part of the public surface. Abstractions and builtin defaults from
-Phase 1 are retained. Full multi-agent support is now available.
+Phase 4 status: AnthropicProvider (real LLM backend) + meta_harney.testing
+module added. Phase 3 polish items resolved (ChildNotFoundError symmetry,
+join-timeout auto-cancel, ToolCallStarted ordering).
+
+Public surface:
+- AgentRuntime facade (create_session, invoke, stream)
+- LLMProvider Protocol + ProviderStreamEvent variants
+- FakeLLMProvider + runtime_for_testing for SDK consumers' tests
+- AnthropicProvider (optional 'anthropic' extra) — first real backend
+- InProcessMultiAgentBackend
+- 9 core abstractions + builtin defaults (Phase 1)
+- StreamEvent types, RetryConfig, RuntimeConfig (Phase 2-3)
 """
 
 from meta_harney.abstractions import (

@@ -389,7 +389,7 @@ async def test_join_timeout_raises_and_cancels_task() -> None:
     await store.save(parent)
 
     backend = InProcessMultiAgentBackend(
-        provider=_BlockingProvider(),  # type: ignore[arg-type]
+        provider=_BlockingProvider(),
         permission_resolver=AllowAllPermissionResolver(),
         session_store=store,
         trace_sink=NullSink(),
