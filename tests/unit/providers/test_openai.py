@@ -18,6 +18,7 @@ from meta_harney.providers.base import (
     ProviderStreamDone,
     ProviderStreamEvent,
     ProviderTextDelta,
+    ProviderToolCall,
     ToolSpec,
 )
 from meta_harney.providers.openai import (
@@ -278,3 +279,126 @@ async def test_stream_finish_reason_length_maps_to_max_tokens() -> None:
         ]
     done = [e for e in collected if isinstance(e, ProviderStreamDone)]
     assert done[0].stop_reason == "max_tokens"
+
+
+def _make_tool_call_delta(
+    *,
+    index: int,
+    id_: str | None = None,
+    name: str | None = None,
+    arguments: str = "",
+) -> MagicMock:
+    tc = MagicMock()
+    tc.index = index
+    tc.id = id_
+    tc.type = "function"
+    func = MagicMock()
+    func.name = name
+    func.arguments = arguments
+    tc.function = func
+    return tc
+
+
+def _make_chunk_with_tool_calls(
+    *,
+    tool_call_deltas: list[Any] | None = None,
+    finish_reason: str | None = None,
+    usage: Any | None = None,
+) -> MagicMock:
+    chunk = MagicMock()
+    choice = MagicMock()
+    delta = MagicMock()
+    delta.content = None
+    delta.tool_calls = tool_call_deltas
+    choice.delta = delta
+    choice.finish_reason = finish_reason
+    chunk.choices = [choice]
+    chunk.usage = usage
+    return chunk
+
+
+async def test_stream_emits_tool_call() -> None:
+    """OpenAI streams tool_calls as per-index deltas; accumulate and emit one ProviderToolCall."""
+    chunks = [
+        _make_chunk_with_tool_calls(
+            tool_call_deltas=[
+                _make_tool_call_delta(index=0, id_="call_abc", name="search"),
+            ],
+        ),
+        _make_chunk_with_tool_calls(
+            tool_call_deltas=[
+                _make_tool_call_delta(index=0, arguments='{"query":'),
+            ],
+        ),
+        _make_chunk_with_tool_calls(
+            tool_call_deltas=[
+                _make_tool_call_delta(index=0, arguments='"hello"}'),
+            ],
+        ),
+        _make_chunk_with_tool_calls(finish_reason="tool_calls"),
+    ]
+
+    fake_completions = MagicMock()
+    fake_completions.create = AsyncMock(return_value=_FakeOpenAIStream(chunks))
+    fake_chat = MagicMock()
+    fake_chat.completions = fake_completions
+    fake_client = MagicMock()
+    fake_client.chat = fake_chat
+
+    with patch("meta_harney.providers.openai.AsyncOpenAI", return_value=fake_client):
+        provider = OpenAIProvider(api_key="test")
+        collected: list[ProviderStreamEvent] = []
+        async for ev in provider.stream(
+            messages=[Message(role="user", content=[TextBlock(text="search hello")])],
+            system_prompt="",
+            tools=[],
+            config=ProviderCallConfig(model="gpt-4"),
+        ):
+            collected.append(ev)
+
+    tool_calls = [e for e in collected if isinstance(e, ProviderToolCall)]
+    assert len(tool_calls) == 1
+    assert tool_calls[0].invocation_id == "call_abc"
+    assert tool_calls[0].name == "search"
+    assert tool_calls[0].args == {"query": "hello"}
+    done = [e for e in collected if isinstance(e, ProviderStreamDone)]
+    assert done[0].stop_reason == "tool_use"
+
+
+async def test_stream_multiple_tool_calls() -> None:
+    """Two tool calls at different indices accumulate independently."""
+    chunks = [
+        _make_chunk_with_tool_calls(
+            tool_call_deltas=[
+                _make_tool_call_delta(index=0, id_="c1", name="f1", arguments='{"a":1}'),
+                _make_tool_call_delta(index=1, id_="c2", name="f2", arguments='{"b":2}'),
+            ],
+        ),
+        _make_chunk_with_tool_calls(finish_reason="tool_calls"),
+    ]
+
+    fake_completions = MagicMock()
+    fake_completions.create = AsyncMock(return_value=_FakeOpenAIStream(chunks))
+    fake_chat = MagicMock()
+    fake_chat.completions = fake_completions
+    fake_client = MagicMock()
+    fake_client.chat = fake_chat
+
+    with patch("meta_harney.providers.openai.AsyncOpenAI", return_value=fake_client):
+        provider = OpenAIProvider(api_key="test")
+        collected: list[ProviderStreamEvent] = []
+        async for ev in provider.stream(
+            messages=[Message(role="user", content=[TextBlock(text="hi")])],
+            system_prompt="",
+            tools=[],
+            config=ProviderCallConfig(model="gpt-4"),
+        ):
+            collected.append(ev)
+
+    tool_calls = [e for e in collected if isinstance(e, ProviderToolCall)]
+    assert len(tool_calls) == 2
+    by_id = {tc.invocation_id: tc for tc in tool_calls}
+    assert by_id["c1"].name == "f1"
+    assert by_id["c1"].args == {"a": 1}
+    assert by_id["c2"].name == "f2"
+    assert by_id["c2"].args == {"b": 2}

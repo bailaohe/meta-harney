@@ -28,6 +28,7 @@ from meta_harney.providers.base import (
     ProviderStreamDone,
     ProviderStreamEvent,
     ProviderTextDelta,
+    ProviderToolCall,
     ToolSpec,
 )
 
@@ -167,10 +168,7 @@ class OpenAIProvider:
         tools: list[ToolSpec],
         config: ProviderCallConfig,
     ) -> AsyncGenerator[ProviderStreamEvent, None]:
-        """Stream one OpenAI Chat Completions call.
-
-        Translates SDK chunks into ProviderStreamEvent variants.
-        """
+        """Stream one OpenAI Chat Completions call."""
         client = AsyncOpenAI(api_key=self._api_key, base_url=self._base_url)
 
         wire_messages = _convert_messages_to_openai(messages, system_prompt=system_prompt)
@@ -193,10 +191,12 @@ class OpenAIProvider:
         input_tokens: int | None = None
         output_tokens: int | None = None
 
+        # tool_call_buffer[index] = {"id": str, "name": str, "args_chunks": [str, ...]}
+        tool_call_buffer: dict[int, dict[str, Any]] = {}
+
         stream_ = await client.chat.completions.create(**kwargs)
 
         async for chunk in stream_:
-            # Usage chunk (with stream_options={"include_usage": True}) has empty choices.
             if getattr(chunk, "usage", None) is not None:
                 input_tokens = getattr(chunk.usage, "prompt_tokens", None)
                 output_tokens = getattr(chunk.usage, "completion_tokens", None)
@@ -211,12 +211,42 @@ class OpenAIProvider:
             if text_delta:
                 yield ProviderTextDelta(text=text_delta)
 
-            # Tool call deltas handled in Task 5
+            tc_deltas = getattr(delta, "tool_calls", None) or []
+            for tc_delta in tc_deltas:
+                idx = tc_delta.index
+                if idx not in tool_call_buffer:
+                    tool_call_buffer[idx] = {
+                        "id": None,
+                        "name": None,
+                        "args_chunks": [],
+                    }
+                buf = tool_call_buffer[idx]
+                if tc_delta.id is not None:
+                    buf["id"] = tc_delta.id
+                fn = getattr(tc_delta, "function", None)
+                if fn is not None:
+                    if fn.name is not None:
+                        buf["name"] = fn.name
+                    if fn.arguments:
+                        buf["args_chunks"].append(fn.arguments)
 
             if choice.finish_reason is not None:
                 finish_reason = choice.finish_reason
 
-        # Map OpenAI finish_reason → meta_harney stop_reason literal
+        # Emit ProviderToolCall for each accumulated tool call (sorted by index)
+        for idx in sorted(tool_call_buffer):
+            buf = tool_call_buffer[idx]
+            raw = "".join(buf["args_chunks"])
+            try:
+                parsed_args = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                parsed_args = {}
+            yield ProviderToolCall(
+                invocation_id=buf["id"] or f"openai-tc-{idx}",
+                name=buf["name"] or "",
+                args=parsed_args,
+            )
+
         stop_map: dict[str, Literal["end_turn", "max_tokens", "tool_use", "error"]] = {
             "stop": "end_turn",
             "length": "max_tokens",
