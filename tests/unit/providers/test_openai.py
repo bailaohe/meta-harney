@@ -402,3 +402,91 @@ async def test_stream_multiple_tool_calls() -> None:
     assert by_id["c1"].args == {"a": 1}
     assert by_id["c2"].name == "f2"
     assert by_id["c2"].args == {"b": 2}
+
+
+async def test_openai_rate_limit_maps_to_retryable() -> None:
+    """RateLimitError → RetryableProviderError."""
+    from openai import RateLimitError
+
+    from meta_harney.errors import RetryableProviderError
+
+    def _raise_rate_limit(**kwargs: Any) -> Any:
+        resp = MagicMock()
+        resp.status_code = 429
+        raise RateLimitError("rate limited", response=resp, body=None)
+
+    fake_completions = MagicMock()
+    fake_completions.create = AsyncMock(side_effect=_raise_rate_limit)
+    fake_chat = MagicMock()
+    fake_chat.completions = fake_completions
+    fake_client = MagicMock()
+    fake_client.chat = fake_chat
+
+    with patch("meta_harney.providers.openai.AsyncOpenAI", return_value=fake_client):
+        provider = OpenAIProvider(api_key="test")
+        with pytest.raises(RetryableProviderError):
+            async for _ev in provider.stream(
+                messages=[Message(role="user", content=[TextBlock(text="hi")])],
+                system_prompt="",
+                tools=[],
+                config=ProviderCallConfig(model="gpt-4"),
+            ):
+                pass
+
+
+async def test_openai_500_maps_to_retryable() -> None:
+    from openai import APIStatusError
+
+    from meta_harney.errors import RetryableProviderError
+
+    def _raise_500(**kwargs: Any) -> Any:
+        resp = MagicMock()
+        resp.status_code = 503
+        raise APIStatusError("upstream error", response=resp, body=None)
+
+    fake_completions = MagicMock()
+    fake_completions.create = AsyncMock(side_effect=_raise_500)
+    fake_chat = MagicMock()
+    fake_chat.completions = fake_completions
+    fake_client = MagicMock()
+    fake_client.chat = fake_chat
+
+    with patch("meta_harney.providers.openai.AsyncOpenAI", return_value=fake_client):
+        provider = OpenAIProvider(api_key="test")
+        with pytest.raises(RetryableProviderError):
+            async for _ev in provider.stream(
+                messages=[Message(role="user", content=[TextBlock(text="hi")])],
+                system_prompt="",
+                tools=[],
+                config=ProviderCallConfig(model="gpt-4"),
+            ):
+                pass
+
+
+async def test_openai_401_maps_to_non_retryable() -> None:
+    from openai import APIStatusError
+
+    from meta_harney.errors import NonRetryableProviderError
+
+    def _raise_401(**kwargs: Any) -> Any:
+        resp = MagicMock()
+        resp.status_code = 401
+        raise APIStatusError("auth failed", response=resp, body=None)
+
+    fake_completions = MagicMock()
+    fake_completions.create = AsyncMock(side_effect=_raise_401)
+    fake_chat = MagicMock()
+    fake_chat.completions = fake_completions
+    fake_client = MagicMock()
+    fake_client.chat = fake_chat
+
+    with patch("meta_harney.providers.openai.AsyncOpenAI", return_value=fake_client):
+        provider = OpenAIProvider(api_key="test")
+        with pytest.raises(NonRetryableProviderError):
+            async for _ev in provider.stream(
+                messages=[Message(role="user", content=[TextBlock(text="hi")])],
+                system_prompt="",
+                tools=[],
+                config=ProviderCallConfig(model="gpt-4"),
+            ):
+                pass

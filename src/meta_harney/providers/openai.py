@@ -13,7 +13,7 @@ import json
 from collections.abc import AsyncGenerator
 from typing import Any, Literal
 
-from openai import AsyncOpenAI
+from openai import APIConnectionError, APIStatusError, AsyncOpenAI, RateLimitError
 
 from meta_harney.abstractions._types import (
     ImageBlock,
@@ -22,7 +22,11 @@ from meta_harney.abstractions._types import (
     ToolCallBlock,
     ToolResultBlock,
 )
-from meta_harney.errors import ConfigurationError
+from meta_harney.errors import (
+    ConfigurationError,
+    NonRetryableProviderError,
+    RetryableProviderError,
+)
 from meta_harney.providers.base import (
     ProviderCallConfig,
     ProviderStreamDone,
@@ -194,44 +198,59 @@ class OpenAIProvider:
         # tool_call_buffer[index] = {"id": str, "name": str, "args_chunks": [str, ...]}
         tool_call_buffer: dict[int, dict[str, Any]] = {}
 
-        stream_ = await client.chat.completions.create(**kwargs)
+        try:
+            stream_ = await client.chat.completions.create(**kwargs)
+            async for chunk in stream_:
+                if getattr(chunk, "usage", None) is not None:
+                    input_tokens = getattr(chunk.usage, "prompt_tokens", None)
+                    output_tokens = getattr(chunk.usage, "completion_tokens", None)
 
-        async for chunk in stream_:
-            if getattr(chunk, "usage", None) is not None:
-                input_tokens = getattr(chunk.usage, "prompt_tokens", None)
-                output_tokens = getattr(chunk.usage, "completion_tokens", None)
+                if not chunk.choices:
+                    continue
 
-            if not chunk.choices:
-                continue
+                choice = chunk.choices[0]
+                delta = choice.delta
 
-            choice = chunk.choices[0]
-            delta = choice.delta
+                text_delta = getattr(delta, "content", None)
+                if text_delta:
+                    yield ProviderTextDelta(text=text_delta)
 
-            text_delta = getattr(delta, "content", None)
-            if text_delta:
-                yield ProviderTextDelta(text=text_delta)
+                tc_deltas = getattr(delta, "tool_calls", None) or []
+                for tc_delta in tc_deltas:
+                    idx = tc_delta.index
+                    if idx not in tool_call_buffer:
+                        tool_call_buffer[idx] = {
+                            "id": None,
+                            "name": None,
+                            "args_chunks": [],
+                        }
+                    buf = tool_call_buffer[idx]
+                    if tc_delta.id is not None:
+                        buf["id"] = tc_delta.id
+                    fn = getattr(tc_delta, "function", None)
+                    if fn is not None:
+                        if fn.name is not None:
+                            buf["name"] = fn.name
+                        if fn.arguments:
+                            buf["args_chunks"].append(fn.arguments)
 
-            tc_deltas = getattr(delta, "tool_calls", None) or []
-            for tc_delta in tc_deltas:
-                idx = tc_delta.index
-                if idx not in tool_call_buffer:
-                    tool_call_buffer[idx] = {
-                        "id": None,
-                        "name": None,
-                        "args_chunks": [],
-                    }
-                buf = tool_call_buffer[idx]
-                if tc_delta.id is not None:
-                    buf["id"] = tc_delta.id
-                fn = getattr(tc_delta, "function", None)
-                if fn is not None:
-                    if fn.name is not None:
-                        buf["name"] = fn.name
-                    if fn.arguments:
-                        buf["args_chunks"].append(fn.arguments)
-
-            if choice.finish_reason is not None:
-                finish_reason = choice.finish_reason
+                if choice.finish_reason is not None:
+                    finish_reason = choice.finish_reason
+        except RateLimitError as exc:
+            raise RetryableProviderError(f"openai rate limit: {exc}") from exc
+        except APIStatusError as exc:
+            status = getattr(exc.response, "status_code", None)
+            if status is not None and 500 <= status < 600:
+                raise RetryableProviderError(
+                    f"openai transient error (status {status}): {exc}"
+                ) from exc
+            raise NonRetryableProviderError(
+                f"openai API error (status {status}): {exc}"
+            ) from exc
+        except APIConnectionError as exc:
+            raise RetryableProviderError(
+                f"openai connection error: {exc}"
+            ) from exc
 
         # Emit ProviderToolCall for each accumulated tool call (sorted by index)
         for idx in sorted(tool_call_buffer):
