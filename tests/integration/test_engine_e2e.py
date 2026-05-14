@@ -1056,9 +1056,7 @@ async def test_thinking_plus_tool_use_multi_turn_persistence_e2e() -> None:
         description = "Look something up."
         input_schema = _LookupInput
 
-        async def execute(
-            self, inv: ToolInvocation, ctx: ToolContext
-        ) -> ToolResult:
+        async def execute(self, inv: ToolInvocation, ctx: ToolContext) -> ToolResult:
             return ToolResult(success=True, output={"answer": 42})
 
     rounds = [
@@ -1094,9 +1092,7 @@ async def test_thinking_plus_tool_use_multi_turn_persistence_e2e() -> None:
 
     # First assistant message has ThinkingBlock (signature preserved)
     first_assistant = refreshed.messages[1]
-    thinking_in_msg = [
-        b for b in first_assistant.content if isinstance(b, ThinkingBlock)
-    ]
+    thinking_in_msg = [b for b in first_assistant.content if isinstance(b, ThinkingBlock)]
     assert len(thinking_in_msg) == 1
     assert thinking_in_msg[0].text == "let me check the DB"
     assert thinking_in_msg[0].signature == "sig1"
@@ -1105,6 +1101,6 @@ async def test_thinking_plus_tool_use_multi_turn_persistence_e2e() -> None:
     assert len(provider.calls) == 2
     second_call_msgs = provider.calls[1].messages
     assistant_msgs = [m for m in second_call_msgs if m.role == "assistant"]
-    assert any(
-        any(isinstance(b, ThinkingBlock) for b in m.content) for m in assistant_msgs
-    ), "second turn should include ThinkingBlock in history"
+    assert any(any(isinstance(b, ThinkingBlock) for b in m.content) for m in assistant_msgs), (
+        "second turn should include ThinkingBlock in history"
+    )

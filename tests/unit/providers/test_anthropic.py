@@ -785,7 +785,13 @@ async def test_anthropic_thinking_block_emit_with_signature_accumulation() -> No
     msg_stop.message.usage = None
 
     events: list[object] = [
-        cb_start, text_delta_1, text_delta_2, sig_delta_1, sig_delta_2, cb_stop, msg_stop,
+        cb_start,
+        text_delta_1,
+        text_delta_2,
+        sig_delta_1,
+        sig_delta_2,
+        cb_stop,
+        msg_stop,
     ]
 
     class _FakeStreamCM:

@@ -211,9 +211,7 @@ async def run_turn(
                     # persist to session.messages.
                     yield ThinkingDelta(text=ev.text)
                 elif isinstance(ev, ProviderThinkingBlock):
-                    thinking_blocks_buf.append(
-                        ThinkingBlock(text=ev.text, signature=ev.signature)
-                    )
+                    thinking_blocks_buf.append(ThinkingBlock(text=ev.text, signature=ev.signature))
                 elif isinstance(ev, ProviderRedactedThinking):
                     thinking_blocks_buf.append(RedactedThinkingBlock(data=ev.data))
                 elif isinstance(ev, ProviderToolCall):

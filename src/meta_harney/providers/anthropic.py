@@ -222,9 +222,7 @@ class AnthropicProvider:
                                 "signature_chunks": [],
                             }
                         elif block_type == "redacted_thinking":
-                            yield ProviderRedactedThinking(
-                                data=getattr(block, "data", "")
-                            )
+                            yield ProviderRedactedThinking(data=getattr(block, "data", ""))
 
                     elif etype == "content_block_delta":
                         delta = event.delta  # type: ignore[union-attr]
