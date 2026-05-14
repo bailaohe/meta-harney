@@ -96,6 +96,56 @@ async def test_records_calls() -> None:
     assert provider.calls[0].messages == msgs
 
 
+async def test_fake_round_emits_provider_thinking_block_from_thinking_blocks() -> None:
+    """FakeRound.thinking_blocks → ProviderThinkingBlock events."""
+    from meta_harney.abstractions._types import ThinkingBlock
+    from meta_harney.providers.base import (
+        ProviderCallConfig,
+        ProviderThinkingBlock,
+    )
+
+    provider = FakeLLMProvider(
+        rounds=[
+            FakeRound(
+                thinking_blocks=[
+                    ThinkingBlock(text="step 1", signature="s1"),
+                    ThinkingBlock(text="step 2", signature="s2"),
+                ],
+                text="Done",
+                stop_reason="end_turn",
+            )
+        ]
+    )
+    collected: list[object] = []
+    async for ev in provider.stream(
+        messages=[Message(role="user", content=[TextBlock(text="hi")])],
+        system_prompt="",
+        tools=[],
+        config=ProviderCallConfig(model="test"),
+    ):
+        collected.append(ev)
+
+    blocks = [e for e in collected if isinstance(e, ProviderThinkingBlock)]
+    assert len(blocks) == 2
+    assert blocks[0].text == "step 1"
+    assert blocks[0].signature == "s1"
+    assert blocks[1].text == "step 2"
+    assert blocks[1].signature == "s2"
+
+
+def test_fake_round_thinking_and_thinking_blocks_mutually_exclusive() -> None:
+    """Setting both .thinking and .thinking_blocks raises validation error."""
+    from pydantic import ValidationError
+
+    from meta_harney.abstractions._types import ThinkingBlock
+
+    with pytest.raises(ValidationError, match="thinking"):
+        FakeRound(
+            thinking="live stream text",
+            thinking_blocks=[ThinkingBlock(text="x", signature="s")],
+        )
+
+
 class TestFakeLLMProviderContract(LLMProviderContract):
     def make_provider(self) -> LLMProvider:
         return FakeLLMProvider(rounds=[FakeRound(text="ok", stop_reason="end_turn")])

@@ -12,14 +12,15 @@ from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
-from meta_harney.abstractions._types import Message
+from meta_harney.abstractions._types import Message, ThinkingBlock
 from meta_harney.providers.base import (
     ProviderCallConfig,
     ProviderStreamDone,
     ProviderStreamEvent,
     ProviderTextDelta,
+    ProviderThinkingBlock,
     ProviderThinkingDelta,
     ProviderToolCall,
     ToolSpec,
@@ -32,10 +33,20 @@ class FakeRound(BaseModel):
     text: str = ""
     split_on: str | None = None  # if set, text is split and each chunk emitted as a delta
     thinking: str | None = None  # if set, emits a ProviderThinkingDelta before text
+    thinking_blocks: list[ThinkingBlock] = []
     tool_calls: list[ProviderToolCall] = []
     stop_reason: Literal["end_turn", "tool_use", "max_tokens", "error"] = "end_turn"
     input_tokens: int | None = None
     output_tokens: int | None = None
+
+    @model_validator(mode="after")
+    def _check_thinking_exclusive(self) -> FakeRound:
+        if self.thinking is not None and self.thinking_blocks:
+            raise ValueError(
+                "FakeRound: set either 'thinking' (live-stream sugar) or "
+                "'thinking_blocks' (persisted), not both"
+            )
+        return self
 
 
 @dataclass
@@ -83,6 +94,8 @@ class FakeLLMProvider:
         # Emit thinking (if any) before any visible output
         if round_.thinking is not None:
             yield ProviderThinkingDelta(text=round_.thinking)
+        for tb in round_.thinking_blocks:
+            yield ProviderThinkingBlock(text=tb.text, signature=tb.signature)
 
         # Emit text (chunked if split_on set)
         if round_.text:
