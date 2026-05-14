@@ -7,7 +7,9 @@ from collections.abc import AsyncGenerator, Callable
 from meta_harney.abstractions._types import (
     ContentBlock,
     Message,
+    RedactedThinkingBlock,
     TextBlock,
+    ThinkingBlock,
     ToolCallBlock,
     ToolResultBlock,
 )
@@ -40,9 +42,11 @@ from meta_harney.errors import SessionNotFoundError
 from meta_harney.providers.base import (
     LLMProvider,
     ProviderCallConfig,
+    ProviderRedactedThinking,
     ProviderStreamDone,
     ProviderStreamEvent,
     ProviderTextDelta,
+    ProviderThinkingBlock,
     ProviderThinkingDelta,
     ProviderToolCall,
     ToolSpec,
@@ -194,6 +198,7 @@ async def run_turn(
 
             text_chunks: list[str] = []
             tool_calls: list[ProviderToolCall] = []
+            thinking_blocks_buf: list[ThinkingBlock | RedactedThinkingBlock] = []
             stop_reason = "end_turn"
 
             for ev in provider_events:
@@ -205,6 +210,12 @@ async def run_turn(
                     # NOT append to text_chunks or assistant_blocks, and do not
                     # persist to session.messages.
                     yield ThinkingDelta(text=ev.text)
+                elif isinstance(ev, ProviderThinkingBlock):
+                    thinking_blocks_buf.append(
+                        ThinkingBlock(text=ev.text, signature=ev.signature)
+                    )
+                elif isinstance(ev, ProviderRedactedThinking):
+                    thinking_blocks_buf.append(RedactedThinkingBlock(data=ev.data))
                 elif isinstance(ev, ProviderToolCall):
                     tool_calls.append(ev)
                 elif isinstance(ev, ProviderStreamDone):
@@ -223,6 +234,8 @@ async def run_turn(
                     )
 
             assistant_blocks: list[ContentBlock] = []
+            for tblk in thinking_blocks_buf:
+                assistant_blocks.append(tblk)
             if text_chunks:
                 assistant_blocks.append(TextBlock(text="".join(text_chunks)))
             for tc in tool_calls:
