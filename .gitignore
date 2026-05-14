@@ -37,3 +37,13 @@ Thumbs.db
 # Tooling
 .python-version
 uv.lock
+
+# Node / TypeScript
+node_modules/
+dist/
+*.tsbuildinfo
+.pnpm-store/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
