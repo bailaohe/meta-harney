@@ -37,10 +37,22 @@ export interface InitializeParams {
   capabilities?: Record<string, unknown>;
 }
 
+/**
+ * Optional metadata about the runtime the server wired up — typically the
+ * smart-picked provider/model when the host doesn't pin them explicitly.
+ * Both fields are optional so older servers that omit the block, or hosts
+ * that only know one of the two, still type-check.
+ */
+export interface RuntimeInfo {
+  provider?: string;
+  model?: string;
+}
+
 export interface InitializeResult {
   server_info: { name: string; version: string };
   protocol_version: number;
   capabilities: Record<string, unknown>;
+  runtime_info?: RuntimeInfo;
 }
 
 export interface SessionCreateParams {

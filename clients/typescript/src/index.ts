@@ -32,6 +32,7 @@ export type {
   BridgeClientOptions,
   InitializeParams,
   InitializeResult,
+  RuntimeInfo,
   SessionCreateParams,
   SessionSummary,
   SessionListEntry,

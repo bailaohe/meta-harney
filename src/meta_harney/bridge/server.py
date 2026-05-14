@@ -51,6 +51,7 @@ class BridgeServer:
         framing: Framing,
         server_info: dict[str, str],
         trace_sink: BridgeTraceSink | None = None,
+        runtime_info: dict[str, str | None] | None = None,
     ) -> None:
         self._runtime = runtime
         self._framing = framing
@@ -75,6 +76,10 @@ class BridgeServer:
         # `telemetry/subscribe`. The host typically wires the SAME sink into
         # the runtime so events flow without further coupling.
         self._trace_sink = trace_sink
+        # Optional metadata about the runtime the host wired up — typically
+        # the smart-picked provider/model. Echoed verbatim in the initialize
+        # response so the client knows what it's actually talking to.
+        self._runtime_info = dict(runtime_info) if runtime_info is not None else None
         self._register_lifecycle_handlers()
         self._register_session_handlers()
         self._register_stream_handlers()
@@ -287,7 +292,7 @@ class BridgeServer:
     # ---- lifecycle handlers ----
 
     async def _handle_initialize(self, params: Any) -> Any:
-        return {
+        result: dict[str, Any] = {
             "server_info": dict(self._server_info),
             "protocol_version": 1,
             "capabilities": {
@@ -300,6 +305,9 @@ class BridgeServer:
                 "tools_list": True,
             },
         }
+        if self._runtime_info is not None:
+            result["runtime_info"] = dict(self._runtime_info)
+        return result
 
     async def _handle_shutdown(self, params: Any) -> Any:
         self._shutting_down = True

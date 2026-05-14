@@ -63,6 +63,29 @@ async def test_initialize_returns_server_info() -> None:
     assert resp["id"] == 1
     assert "result" in resp
     assert resp["result"]["server_info"]["name"] == "test-bridge"
+    # When constructed without runtime_info, the field is absent (not just
+    # null) so older clients don't see a confusing empty object.
+    assert "runtime_info" not in resp["result"]
+
+
+@pytest.mark.asyncio
+async def test_initialize_echoes_runtime_info_when_provided() -> None:
+    """Hosts that smart-pick provider/model can publish the choice via
+    `runtime_info` so the client knows what's actually serving."""
+    server = BridgeServer(
+        runtime=_FakeRuntime(),  # type: ignore[arg-type]
+        framing=NewlineFraming(),
+        server_info={"name": "test-bridge", "version": "0.0.1"},
+        runtime_info={"provider": "deepseek", "model": "deepseek-chat"},
+    )
+    resp = await _drive_one(
+        server,
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+    )
+    assert resp["result"]["runtime_info"] == {
+        "provider": "deepseek",
+        "model": "deepseek-chat",
+    }
 
 
 @pytest.mark.asyncio

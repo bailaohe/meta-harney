@@ -150,6 +150,48 @@ describe("BridgeClient lifecycle", () => {
     await client.exit();
   });
 
+  it("initialize surfaces runtime_info when present in response", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    t.feed({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        server_info: { name: "x", version: "1" },
+        protocol_version: 1,
+        capabilities: {},
+        runtime_info: { provider: "deepseek", model: "deepseek-chat" },
+      },
+    });
+    const info = await client.initialize({
+      clientInfo: { name: "test", version: "0" },
+    });
+    expect(info.runtime_info?.provider).toBe("deepseek");
+    expect(info.runtime_info?.model).toBe("deepseek-chat");
+    await client.exit();
+  });
+
+  it("initialize tolerates absent runtime_info (older servers)", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    t.feed({
+      jsonrpc: "2.0",
+      id: 1,
+      result: {
+        server_info: { name: "x", version: "1" },
+        protocol_version: 1,
+        capabilities: {},
+      },
+    });
+    const info = await client.initialize({
+      clientInfo: { name: "test", version: "0" },
+    });
+    expect(info.runtime_info).toBeUndefined();
+    await client.exit();
+  });
+
   it("shutdown sends shutdown request, exit sends notification", async () => {
     const t = new FakeTransport();
     const client = makeClient(t);
