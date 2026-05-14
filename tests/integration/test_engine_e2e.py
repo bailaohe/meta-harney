@@ -412,3 +412,60 @@ async def test_compaction_triggered_e2e() -> None:
         for m in loaded.messages
     )
     assert has_summary
+
+
+async def test_cancellation_preserves_session() -> None:
+    """If caller cancels mid-turn, session is saved with partial state."""
+    from collections.abc import AsyncGenerator
+
+    from meta_harney.providers.base import (
+        ProviderCallConfig,
+        ProviderStreamEvent,
+        ToolSpec,
+    )
+
+    store = MemorySessionStore()
+    await _new_session(store)
+
+    class _BlockingProvider:
+        async def stream(
+            self,
+            messages: list[Message],
+            system_prompt: str,
+            tools: list[ToolSpec],
+            config: ProviderCallConfig,
+        ) -> AsyncGenerator[ProviderStreamEvent, None]:
+            await asyncio.sleep(10.0)  # will be cancelled
+            # unreachable yield to make it a generator
+            if False:
+                yield  # type: ignore[unreachable]
+
+    async def runner() -> None:
+        async for _ev in run_turn(
+            session_id="s1",
+            user_message=Message(role="user", content=[TextBlock(text="hi")]),
+            provider=_BlockingProvider(),  # type: ignore[arg-type]
+            prompt_builder=MinimalPromptBuilder(session_store=store),
+            permission_resolver=AllowAllPermissionResolver(),
+            tools={},
+            hooks=[],
+            session_store=store,
+            trace_sink=NullSink(),
+            config=RuntimeConfig(model="x"),
+        ):
+            pass
+
+    task = asyncio.create_task(runner())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # Session should be saved with user message (half-baked turn)
+    loaded = await store.load("s1")
+    assert loaded is not None
+    user_msgs = [m for m in loaded.messages if m.role == "user"]
+    assert len(user_msgs) >= 1
+    last_user = user_msgs[-1].content[0]
+    assert isinstance(last_user, TextBlock)
+    assert last_user.text == "hi"

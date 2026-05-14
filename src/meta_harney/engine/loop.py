@@ -77,275 +77,303 @@ async def run_turn(
 
     session.messages.append(user_message)
 
-    await emit_event(
-        trace_sink,
-        session_id=session_id,
-        kind="turn.started",
-        span_id=turn_span,
-        parent_span_id=None,
-        payload={"user_message_role": user_message.role},
-    )
-
-    # Fire session_start hook
-    await dispatch_hooks(
-        hooks,
-        HookEvent(
-            kind="session_start",
-            session_id=session_id,
-            payload={"user_message_role": user_message.role},
-        ),
-        trace_sink,
-        turn_span,
-    )
-
-    tool_specs = [tool_to_spec(t) for t in tools.values()]
+    saved = False
     iteration = 0
-    stop = False
-
-    while not stop and iteration < config.max_iterations:
-        system_prompt = await prompt_builder.build_system_prompt(session_id)
+    try:
         await emit_event(
             trace_sink,
             session_id=session_id,
-            kind="prompt.built",
-            span_id=new_span_id(),
-            parent_span_id=turn_span,
-            payload={"n_messages": len(session.messages), "iteration": iteration},
+            kind="turn.started",
+            span_id=turn_span,
+            parent_span_id=None,
+            payload={"user_message_role": user_message.role},
         )
 
-        # Fire pre_llm hook
+        # Fire session_start hook
         await dispatch_hooks(
             hooks,
             HookEvent(
-                kind="pre_llm",
+                kind="session_start",
                 session_id=session_id,
-                payload={"iteration": iteration, "n_messages": len(session.messages)},
+                payload={"user_message_role": user_message.role},
             ),
             trace_sink,
             turn_span,
         )
 
-        llm_span = new_span_id()
-        await emit_event(
-            trace_sink,
-            session_id=session_id,
-            kind="llm.requested",
-            span_id=llm_span,
-            parent_span_id=turn_span,
-            payload={"model": config.model, "iteration": iteration},
-        )
+        tool_specs = [tool_to_spec(t) for t in tools.values()]
+        stop = False
 
-        text_chunks: list[str] = []
-        tool_calls: list[ProviderToolCall] = []
-        stop_reason = "end_turn"
+        while not stop and iteration < config.max_iterations:
+            system_prompt = await prompt_builder.build_system_prompt(session_id)
+            await emit_event(
+                trace_sink,
+                session_id=session_id,
+                kind="prompt.built",
+                span_id=new_span_id(),
+                parent_span_id=turn_span,
+                payload={"n_messages": len(session.messages), "iteration": iteration},
+            )
 
-        async for ev in provider.stream(
-            messages=list(session.messages),
-            system_prompt=system_prompt,
-            tools=tool_specs,
-            config=ProviderCallConfig(model=config.model),
-        ):
-            if isinstance(ev, ProviderTextDelta):
-                text_chunks.append(ev.text)
-                yield TextDelta(text=ev.text)
-            elif isinstance(ev, ProviderToolCall):
-                tool_calls.append(ev)
-            elif isinstance(ev, ProviderStreamDone):
-                stop_reason = ev.stop_reason
-                await emit_event(
-                    trace_sink,
+            # Fire pre_llm hook
+            await dispatch_hooks(
+                hooks,
+                HookEvent(
+                    kind="pre_llm",
                     session_id=session_id,
-                    kind="llm.completed",
-                    span_id=new_span_id(),
-                    parent_span_id=llm_span,
-                    payload={
-                        "stop_reason": ev.stop_reason,
-                        "input_tokens": ev.input_tokens,
-                        "output_tokens": ev.output_tokens,
-                    },
-                )
-                break
+                    payload={"iteration": iteration, "n_messages": len(session.messages)},
+                ),
+                trace_sink,
+                turn_span,
+            )
 
-        assistant_blocks: list[ContentBlock] = []
-        if text_chunks:
-            assistant_blocks.append(TextBlock(text="".join(text_chunks)))
-        for tc in tool_calls:
-            assistant_blocks.append(ToolCallBlock(
-                invocation_id=tc.invocation_id,
-                name=tc.name,
-                args=tc.args,
-            ))
-        session.messages.append(Message(role="assistant", content=assistant_blocks))
-
-        # Fire post_llm hook
-        await dispatch_hooks(
-            hooks,
-            HookEvent(
-                kind="post_llm",
+            llm_span = new_span_id()
+            await emit_event(
+                trace_sink,
                 session_id=session_id,
-                payload={
-                    "iteration": iteration,
-                    "stop_reason": stop_reason,
-                    "n_tool_calls": len(tool_calls),
-                },
-            ),
-            trace_sink,
-            turn_span,
-        )
-
-        # No tool calls? we're done
-        if not tool_calls:
-            stop = True
-            yield IterationCompleted(iteration=iteration)
-            iteration += 1
-            break
-
-        # Dispatch each tool call (pre_tool / post_tool fire inside execute_tool)
-        tool_result_blocks: list[ContentBlock] = []
-        for tc in tool_calls:
-            yield ToolCallStarted(
-                tool_name=tc.name,
-                invocation_id=tc.invocation_id,
-                args=tc.args,
+                kind="llm.requested",
+                span_id=llm_span,
+                parent_span_id=turn_span,
+                payload={"model": config.model, "iteration": iteration},
             )
 
-            inv = ToolInvocation(
-                name=tc.name,
-                args=tc.args,
-                invocation_id=tc.invocation_id,
-                session_id=session_id,
-            )
+            text_chunks: list[str] = []
+            tool_calls: list[ProviderToolCall] = []
+            stop_reason = "end_turn"
 
-            tool = tools.get(tc.name)
-            if tool is None:
-                result = await _result_for_unknown_tool(
-                    inv=inv,
-                    sink=trace_sink,
-                    parent_span=turn_span,
-                )
-            else:
-                ctx = ToolContext(
-                    session_store=session_store,
-                    trace_sink=trace_sink,
-                    current_span_id=turn_span,
-                    new_span_id=new_span_id,
-                )
-                result = await execute_tool(
-                    invocation=inv,
-                    tool=tool,
-                    permission_resolver=permission_resolver,
-                    hooks=hooks,
-                    ctx=ctx,
-                    config=config,
-                    parent_span_id=turn_span,
-                )
-
-            tool_result_blocks.append(ToolResultBlock(
-                invocation_id=inv.invocation_id,
-                success=result.success,
-                output=result.output,
-                error=result.error,
-            ))
-            yield ToolCallCompleted(
-                tool_name=tc.name,
-                invocation_id=tc.invocation_id,
-                result=result,
-            )
-
-        session.messages.append(Message(role="tool", content=tool_result_blocks))
-        yield IterationCompleted(iteration=iteration)
-        iteration += 1
-
-        # Compaction check after each tool iteration
-        if (
-            compaction is not None
-            and config.compaction_trigger_tokens is not None
-        ):
-            current_tokens = counter(session.messages)
-            if current_tokens > config.compaction_trigger_tokens:
-                should = await compaction.should_compact(
-                    session_id, current_tokens, config.context_window_tokens
-                )
-                if should:
-                    before_n = len(session.messages)
-                    before_tokens = current_tokens
-                    # Persist current state so compactor can re-load it
-                    await session_store.save(session)
-                    # Re-load to refresh version after save
-                    fresh = await session_store.load(session_id)
-                    assert fresh is not None
-                    session = fresh
-                    try:
-                        new_messages = await compaction.compact(session_id)
-                    except Exception as exc:
-                        await emit_event(
-                            trace_sink,
-                            session_id=session_id,
-                            kind="error.raised",
-                            span_id=new_span_id(),
-                            parent_span_id=turn_span,
-                            payload={
-                                "source": "compaction",
-                                "exc_type": type(exc).__name__,
-                                "message": str(exc),
-                            },
-                        )
-                        # Per spec §7.2: CompactionError fail-open, continue loop
-                        continue
-                    session.messages = new_messages
-                    after_n = len(session.messages)
-                    after_tokens = counter(session.messages)
+            async for ev in provider.stream(
+                messages=list(session.messages),
+                system_prompt=system_prompt,
+                tools=tool_specs,
+                config=ProviderCallConfig(model=config.model),
+            ):
+                if isinstance(ev, ProviderTextDelta):
+                    text_chunks.append(ev.text)
+                    yield TextDelta(text=ev.text)
+                elif isinstance(ev, ProviderToolCall):
+                    tool_calls.append(ev)
+                elif isinstance(ev, ProviderStreamDone):
+                    stop_reason = ev.stop_reason
                     await emit_event(
                         trace_sink,
                         session_id=session_id,
-                        kind="compaction.triggered",
+                        kind="llm.completed",
+                        span_id=new_span_id(),
+                        parent_span_id=llm_span,
+                        payload={
+                            "stop_reason": ev.stop_reason,
+                            "input_tokens": ev.input_tokens,
+                            "output_tokens": ev.output_tokens,
+                        },
+                    )
+                    break
+
+            assistant_blocks: list[ContentBlock] = []
+            if text_chunks:
+                assistant_blocks.append(TextBlock(text="".join(text_chunks)))
+            for tc in tool_calls:
+                assistant_blocks.append(ToolCallBlock(
+                    invocation_id=tc.invocation_id,
+                    name=tc.name,
+                    args=tc.args,
+                ))
+            session.messages.append(Message(role="assistant", content=assistant_blocks))
+
+            # Fire post_llm hook
+            await dispatch_hooks(
+                hooks,
+                HookEvent(
+                    kind="post_llm",
+                    session_id=session_id,
+                    payload={
+                        "iteration": iteration,
+                        "stop_reason": stop_reason,
+                        "n_tool_calls": len(tool_calls),
+                    },
+                ),
+                trace_sink,
+                turn_span,
+            )
+
+            # No tool calls? we're done
+            if not tool_calls:
+                stop = True
+                yield IterationCompleted(iteration=iteration)
+                iteration += 1
+                break
+
+            # Dispatch each tool call (pre_tool / post_tool fire inside execute_tool)
+            tool_result_blocks: list[ContentBlock] = []
+            for tc in tool_calls:
+                yield ToolCallStarted(
+                    tool_name=tc.name,
+                    invocation_id=tc.invocation_id,
+                    args=tc.args,
+                )
+
+                inv = ToolInvocation(
+                    name=tc.name,
+                    args=tc.args,
+                    invocation_id=tc.invocation_id,
+                    session_id=session_id,
+                )
+
+                tool = tools.get(tc.name)
+                if tool is None:
+                    result = await _result_for_unknown_tool(
+                        inv=inv,
+                        sink=trace_sink,
+                        parent_span=turn_span,
+                    )
+                else:
+                    ctx = ToolContext(
+                        session_store=session_store,
+                        trace_sink=trace_sink,
+                        current_span_id=turn_span,
+                        new_span_id=new_span_id,
+                    )
+                    result = await execute_tool(
+                        invocation=inv,
+                        tool=tool,
+                        permission_resolver=permission_resolver,
+                        hooks=hooks,
+                        ctx=ctx,
+                        config=config,
+                        parent_span_id=turn_span,
+                    )
+
+                tool_result_blocks.append(ToolResultBlock(
+                    invocation_id=inv.invocation_id,
+                    success=result.success,
+                    output=result.output,
+                    error=result.error,
+                ))
+                yield ToolCallCompleted(
+                    tool_name=tc.name,
+                    invocation_id=tc.invocation_id,
+                    result=result,
+                )
+
+            session.messages.append(Message(role="tool", content=tool_result_blocks))
+            yield IterationCompleted(iteration=iteration)
+            iteration += 1
+
+            # Compaction check after each tool iteration
+            if (
+                compaction is not None
+                and config.compaction_trigger_tokens is not None
+            ):
+                current_tokens = counter(session.messages)
+                if current_tokens > config.compaction_trigger_tokens:
+                    should = await compaction.should_compact(
+                        session_id, current_tokens, config.context_window_tokens
+                    )
+                    if should:
+                        before_n = len(session.messages)
+                        before_tokens = current_tokens
+                        # Persist current state so compactor can re-load it
+                        await session_store.save(session)
+                        # Re-load to refresh version after save
+                        fresh = await session_store.load(session_id)
+                        assert fresh is not None
+                        session = fresh
+                        try:
+                            new_messages = await compaction.compact(session_id)
+                        except Exception as exc:
+                            await emit_event(
+                                trace_sink,
+                                session_id=session_id,
+                                kind="error.raised",
+                                span_id=new_span_id(),
+                                parent_span_id=turn_span,
+                                payload={
+                                    "source": "compaction",
+                                    "exc_type": type(exc).__name__,
+                                    "message": str(exc),
+                                },
+                            )
+                            # Per spec §7.2: CompactionError fail-open, continue loop
+                            continue
+                        session.messages = new_messages
+                        after_n = len(session.messages)
+                        after_tokens = counter(session.messages)
+                        await emit_event(
+                            trace_sink,
+                            session_id=session_id,
+                            kind="compaction.triggered",
+                            span_id=new_span_id(),
+                            parent_span_id=turn_span,
+                            payload={
+                                "before_msgs": before_n,
+                                "after_msgs": after_n,
+                                "before_tokens": before_tokens,
+                                "after_tokens": after_tokens,
+                            },
+                        )
+
+        # Fire turn_complete hook
+        await dispatch_hooks(
+            hooks,
+            HookEvent(
+                kind="turn_complete",
+                session_id=session_id,
+                payload={"total_iterations": iteration},
+            ),
+            trace_sink,
+            turn_span,
+        )
+
+        # Fire session_end hook
+        await dispatch_hooks(
+            hooks,
+            HookEvent(
+                kind="session_end",
+                session_id=session_id,
+                payload={"total_iterations": iteration},
+            ),
+            trace_sink,
+            turn_span,
+        )
+
+        await session_store.save(session)
+        saved = True
+
+        await emit_event(
+            trace_sink,
+            session_id=session_id,
+            kind="turn.completed",
+            span_id=new_span_id(),
+            parent_span_id=turn_span,
+            payload={"total_iterations": iteration},
+        )
+        await trace_sink.flush()
+
+        yield TurnCompleted(total_iterations=iteration)
+
+    finally:
+        if not saved:
+            try:
+                await session_store.save(session)
+            except Exception as save_exc:
+                try:
+                    await emit_event(
+                        trace_sink,
+                        session_id=session_id,
+                        kind="error.raised",
                         span_id=new_span_id(),
                         parent_span_id=turn_span,
                         payload={
-                            "before_msgs": before_n,
-                            "after_msgs": after_n,
-                            "before_tokens": before_tokens,
-                            "after_tokens": after_tokens,
+                            "source": "engine_finally",
+                            "exc_type": type(save_exc).__name__,
+                            "message": str(save_exc),
                         },
                     )
-
-    # Fire turn_complete hook
-    await dispatch_hooks(
-        hooks,
-        HookEvent(
-            kind="turn_complete",
-            session_id=session_id,
-            payload={"total_iterations": iteration},
-        ),
-        trace_sink,
-        turn_span,
-    )
-
-    # Fire session_end hook
-    await dispatch_hooks(
-        hooks,
-        HookEvent(
-            kind="session_end",
-            session_id=session_id,
-            payload={"total_iterations": iteration},
-        ),
-        trace_sink,
-        turn_span,
-    )
-
-    await session_store.save(session)
-
-    await emit_event(
-        trace_sink,
-        session_id=session_id,
-        kind="turn.completed",
-        span_id=new_span_id(),
-        parent_span_id=turn_span,
-        payload={"total_iterations": iteration},
-    )
-    await trace_sink.flush()
-
-    yield TurnCompleted(total_iterations=iteration)
+                except Exception:
+                    pass
+        try:
+            await trace_sink.flush()
+        except Exception:
+            pass
 
 
 async def _result_for_unknown_tool(
