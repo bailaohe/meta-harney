@@ -28,6 +28,7 @@ from meta_harney.bridge.protocol import (
     JsonRpcResponse,
     parse_incoming,
 )
+from meta_harney.bridge.trace import BridgeTraceSink
 from meta_harney.runtime import AgentRuntime
 
 logger = logging.getLogger("meta_harney.bridge")
@@ -49,6 +50,7 @@ class BridgeServer:
         runtime: AgentRuntime,
         framing: Framing,
         server_info: dict[str, str],
+        trace_sink: BridgeTraceSink | None = None,
     ) -> None:
         self._runtime = runtime
         self._framing = framing
@@ -71,10 +73,16 @@ class BridgeServer:
         self._outbound_id_counter: Callable[[], int] = itertools.count(
             start=-1, step=-1
         ).__next__
+        # Optional BridgeTraceSink whose subscription bit is toggled by
+        # `telemetry/subscribe`. The host typically wires the SAME sink into
+        # the runtime so events flow without further coupling.
+        self._trace_sink = trace_sink
         self._register_lifecycle_handlers()
         self._register_session_handlers()
         self._register_stream_handlers()
         self._register_cancel_handlers()
+        self._register_telemetry_handlers()
+        self._register_tools_handlers()
 
     # ---- handler registration ----
 
@@ -96,6 +104,15 @@ class BridgeServer:
         # $/cancelRequest: LSP-style notification — no response
         self._handlers["session.cancel"] = self._handle_session_cancel
         self._notification_handlers["$/cancelRequest"] = self._handle_cancel_notification
+
+    def _register_telemetry_handlers(self) -> None:
+        # telemetry/subscribe: request — toggles forwarding of trace events as
+        # `telemetry/event` notifications via the wired BridgeTraceSink.
+        self._handlers["telemetry/subscribe"] = self._handle_telemetry_subscribe
+
+    def _register_tools_handlers(self) -> None:
+        # tools.list: request — enumerates runtime tools as introspection.
+        self._handlers["tools.list"] = self._handle_tools_list
 
     # ---- public entry point ----
 
@@ -404,6 +421,53 @@ class BridgeServer:
             "created_at": sess.created_at.isoformat(),
             "messages": [m.model_dump() for m in sess.messages],
         }
+
+    # ---- telemetry & tools handlers ----
+
+    async def _handle_telemetry_subscribe(self, params: Any) -> Any:
+        """Toggle the wired BridgeTraceSink's subscription flag.
+
+        If no trace_sink was wired at construction time the call is a no-op
+        (the response still echoes `enabled` so clients can drive UI state).
+        """
+        p = params or {}
+        enabled = p.get("enabled")
+        if not isinstance(enabled, bool):
+            raise InvalidParams("enabled (bool) required")
+        if self._trace_sink is not None:
+            self._trace_sink.set_enabled(enabled)
+        return {"enabled": enabled}
+
+    async def _handle_tools_list(self, params: Any) -> Any:
+        """Enumerate runtime tools for client-side introspection.
+
+        Reads ``runtime._tools`` defensively (private attr — acceptable for
+        v1; future task: promote to a public property). Tries common schema
+        attribute names; if the value exposes ``model_json_schema()`` we call
+        it so clients receive a plain JSON schema rather than a pydantic
+        class reference.
+        """
+        tools = getattr(self._runtime, "_tools", {}) or {}
+        out: list[dict[str, Any]] = []
+        for name, tool in tools.items():
+            schema: Any = None
+            for attr in ("input_schema", "args_schema", "schema"):
+                v = getattr(tool, attr, None)
+                if v is not None:
+                    schema = (
+                        v.model_json_schema()
+                        if hasattr(v, "model_json_schema")
+                        else v
+                    )
+                    break
+            out.append(
+                {
+                    "name": name,
+                    "description": getattr(tool, "description", ""),
+                    "input_schema": schema,
+                }
+            )
+        return out
 
 
 def _json_default(o: Any) -> Any:
