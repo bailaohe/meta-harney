@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import traceback
@@ -59,6 +60,7 @@ class BridgeServer:
         self._inflight: set[asyncio.Task[None]] = set()
         self._register_lifecycle_handlers()
         self._register_session_handlers()
+        self._register_stream_handlers()
 
     # ---- handler registration ----
 
@@ -71,6 +73,9 @@ class BridgeServer:
         self._handlers["session.create"] = self._handle_session_create
         self._handlers["session.list"] = self._handle_session_list
         self._handlers["session.load"] = self._handle_session_load
+
+    def _register_stream_handlers(self) -> None:
+        self._handlers["session.send_message"] = self._handle_session_send_message
 
     # ---- public entry point ----
 
@@ -146,16 +151,20 @@ class BridgeServer:
         if handler is None:
             await self._send_error(req.id, MethodNotFound(req.method))
             return
+        token = _current_request_id.set(req.id)
         try:
-            result = await handler(req.params)
-        except BridgeError as exc:
-            await self._send_error(req.id, exc)
-        except Exception as exc:
-            logger.exception("internal error in handler %s", req.method)
-            err = InternalError(str(exc), data={"traceback": traceback.format_exc()})
-            await self._send_error(req.id, err)
-        else:
-            await self._send_response(req.id, result)
+            try:
+                result = await handler(req.params)
+            except BridgeError as exc:
+                await self._send_error(req.id, exc)
+            except Exception as exc:
+                logger.exception("internal error in handler %s", req.method)
+                err = InternalError(str(exc), data={"traceback": traceback.format_exc()})
+                await self._send_error(req.id, err)
+            else:
+                await self._send_response(req.id, result)
+        finally:
+            _current_request_id.reset(token)
 
     async def _dispatch_notification(self, note: JsonRpcNotification) -> None:
         handler = self._notification_handlers.get(note.method)
@@ -248,6 +257,38 @@ class BridgeServer:
             for s in sessions
         ]
 
+    async def _handle_session_send_message(self, params: Any) -> Any:
+        """Long-running: stream runtime events as `stream/event` notifications.
+
+        Each emitted event is wrapped in a notification whose `params.request_id`
+        equals the JSON-RPC id of THIS send_message request (recovered from the
+        `_current_request_id` ContextVar set by `_dispatch_request`).
+
+        After the runtime stream is fully drained, returns a final response of
+        the form `{"stopped_reason": ...}`.
+        """
+        from meta_harney.abstractions._types import Message
+
+        p = params or {}
+        sid = p.get("session_id")
+        msg_dict = p.get("message")
+        if not isinstance(sid, str) or not sid or not isinstance(msg_dict, dict):
+            raise InvalidParams("session_id (str) and message (dict) required")
+
+        try:
+            message = Message.model_validate(msg_dict)
+        except Exception as exc:  # pydantic ValidationError -> InvalidParams
+            raise InvalidParams(f"invalid message: {exc}") from exc
+
+        request_id = _current_request_id.get()
+        stop_reason = "completed"
+        async for event in self._runtime.stream(sid, message):
+            await self._send_notification(
+                "stream/event",
+                {"request_id": request_id, "event": _serialize_event(event)},
+            )
+        return {"stopped_reason": stop_reason}
+
     async def _handle_session_load(self, params: Any) -> Any:
         p = params or {}
         sid = p.get("session_id")
@@ -273,3 +314,23 @@ def _json_default(o: Any) -> Any:
     if hasattr(o, "isoformat"):
         return o.isoformat()
     raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
+
+# ---- streaming support ---------------------------------------------------
+# `_current_request_id` lets long-running handlers (e.g. session.send_message)
+# recover the JSON-RPC id of the request that invoked them, so they can embed
+# it in correlated notifications. The dispatcher sets it for the duration of
+# each handler call (see `_dispatch_request`). Task 6 (cancel) reuses this.
+_current_request_id: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "_current_request_id", default=None
+)
+
+
+def _serialize_event(event: Any) -> Any:
+    """Best-effort StreamEvent → JSON-safe dict."""
+    if hasattr(event, "model_dump"):
+        dumped = event.model_dump()
+        return dumped
+    if isinstance(event, dict):
+        return event
+    return {"repr": repr(event)}
