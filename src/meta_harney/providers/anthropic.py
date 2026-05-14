@@ -13,7 +13,7 @@ import json
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from anthropic import AsyncAnthropic
+from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic
 
 from meta_harney.abstractions._types import (
     ImageBlock,
@@ -22,7 +22,11 @@ from meta_harney.abstractions._types import (
     ToolCallBlock,
     ToolResultBlock,
 )
-from meta_harney.errors import ConfigurationError
+from meta_harney.errors import (
+    ConfigurationError,
+    NonRetryableProviderError,
+    RetryableProviderError,
+)
 from meta_harney.providers.base import (
     ProviderCallConfig,
     ProviderStreamDone,
@@ -175,58 +179,72 @@ class AnthropicProvider:
         # Per-tool-use streaming state: block_index → {"id":..., "name":..., "json_chunks":[...]}
         tool_use_buffer: dict[int, dict[str, Any]] = {}
 
-        async with client.messages.stream(**kwargs) as stream_:
-            async for event in stream_:
-                etype = getattr(event, "type", None)
+        try:
+            async with client.messages.stream(**kwargs) as stream_:
+                async for event in stream_:
+                    etype = getattr(event, "type", None)
 
-                if etype == "content_block_start":
-                    block = event.content_block  # type: ignore[union-attr]
-                    if getattr(block, "type", None) == "tool_use":
-                        tool_use_buffer[event.index] = {  # type: ignore[union-attr]
-                            "id": block.id,  # type: ignore[union-attr]
-                            "name": block.name,  # type: ignore[union-attr]
-                            "json_chunks": [],
-                        }
+                    if etype == "content_block_start":
+                        block = event.content_block  # type: ignore[union-attr]
+                        if getattr(block, "type", None) == "tool_use":
+                            tool_use_buffer[event.index] = {  # type: ignore[union-attr]
+                                "id": block.id,  # type: ignore[union-attr]
+                                "name": block.name,  # type: ignore[union-attr]
+                                "json_chunks": [],
+                            }
 
-                elif etype == "content_block_delta":
-                    delta = event.delta  # type: ignore[union-attr]
-                    dtype = getattr(delta, "type", None)
-                    if dtype == "text_delta":
-                        yield ProviderTextDelta(text=delta.text)  # type: ignore[union-attr]
-                    elif dtype == "input_json_delta":
+                    elif etype == "content_block_delta":
+                        delta = event.delta  # type: ignore[union-attr]
+                        dtype = getattr(delta, "type", None)
+                        if dtype == "text_delta":
+                            yield ProviderTextDelta(text=delta.text)  # type: ignore[union-attr]
+                        elif dtype == "input_json_delta":
+                            idx = event.index  # type: ignore[union-attr]
+                            if idx in tool_use_buffer:
+                                tool_use_buffer[idx]["json_chunks"].append(delta.partial_json)  # type: ignore[union-attr]
+
+                    elif etype == "content_block_stop":
                         idx = event.index  # type: ignore[union-attr]
                         if idx in tool_use_buffer:
-                            tool_use_buffer[idx]["json_chunks"].append(delta.partial_json)  # type: ignore[union-attr]
+                            buf = tool_use_buffer.pop(idx)
+                            raw_json = "".join(buf["json_chunks"])
+                            try:
+                                parsed_args = json.loads(raw_json) if raw_json else {}
+                            except json.JSONDecodeError:
+                                parsed_args = {}
+                            yield ProviderToolCall(
+                                invocation_id=buf["id"],
+                                name=buf["name"],
+                                args=parsed_args,
+                            )
 
-                elif etype == "content_block_stop":
-                    idx = event.index  # type: ignore[union-attr]
-                    if idx in tool_use_buffer:
-                        buf = tool_use_buffer.pop(idx)
-                        raw_json = "".join(buf["json_chunks"])
-                        try:
-                            parsed_args = json.loads(raw_json) if raw_json else {}
-                        except json.JSONDecodeError:
-                            parsed_args = {}
-                        yield ProviderToolCall(
-                            invocation_id=buf["id"],
-                            name=buf["name"],
-                            args=parsed_args,
+                    elif etype == "message_stop":
+                        msg = event.message  # type: ignore[union-attr]
+                        usage = getattr(msg, "usage", None)
+                        raw_stop_reason = getattr(msg, "stop_reason", "end_turn")
+                        # Map Anthropic stop reasons to our Literal; unknown → "end_turn"
+                        known = {"end_turn", "tool_use", "max_tokens", "error"}
+                        stop_reason = raw_stop_reason if raw_stop_reason in known else "end_turn"
+                        yield ProviderStreamDone(
+                            stop_reason=stop_reason,  # type: ignore[arg-type]
+                            input_tokens=(
+                                getattr(usage, "input_tokens", None) if usage else None
+                            ),
+                            output_tokens=(
+                                getattr(usage, "output_tokens", None) if usage else None
+                            ),
                         )
-
-                elif etype == "message_stop":
-                    msg = event.message  # type: ignore[union-attr]
-                    usage = getattr(msg, "usage", None)
-                    raw_stop_reason = getattr(msg, "stop_reason", "end_turn")
-                    # Map Anthropic stop reasons to our Literal; unknown → "end_turn"
-                    known = {"end_turn", "tool_use", "max_tokens", "error"}
-                    stop_reason = raw_stop_reason if raw_stop_reason in known else "end_turn"
-                    yield ProviderStreamDone(
-                        stop_reason=stop_reason,  # type: ignore[arg-type]
-                        input_tokens=(
-                            getattr(usage, "input_tokens", None) if usage else None
-                        ),
-                        output_tokens=(
-                            getattr(usage, "output_tokens", None) if usage else None
-                        ),
-                    )
-                    return
+                        return
+        except APIStatusError as exc:
+            status = getattr(exc.response, "status_code", None)
+            if status is not None and (status == 429 or 500 <= status < 600):
+                raise RetryableProviderError(
+                    f"anthropic transient error (status {status}): {exc}"
+                ) from exc
+            raise NonRetryableProviderError(
+                f"anthropic API error (status {status}): {exc}"
+            ) from exc
+        except APIConnectionError as exc:
+            raise RetryableProviderError(
+                f"anthropic connection error: {exc}"
+            ) from exc

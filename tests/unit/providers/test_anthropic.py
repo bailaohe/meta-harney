@@ -267,3 +267,102 @@ async def test_stream_emits_tool_call() -> None:
     assert tool_calls[0].name == "search"
     assert tool_calls[0].args == {"query": "hello"}
     assert tool_calls[0].invocation_id == "toolu_01abc"
+
+
+async def test_anthropic_429_maps_to_retryable() -> None:
+    """RateLimitError → RetryableProviderError."""
+    from anthropic import APIStatusError
+
+    from meta_harney.errors import RetryableProviderError
+
+    fake_messages_client = MagicMock()
+
+    def _raise_rate_limit(**kwargs: Any) -> Any:
+        resp = MagicMock()
+        resp.status_code = 429
+        raise APIStatusError("rate limited", response=resp, body=None)
+
+    fake_messages_client.stream = MagicMock(side_effect=_raise_rate_limit)
+    fake_client = MagicMock()
+    fake_client.messages = fake_messages_client
+
+    with patch(
+        "meta_harney.providers.anthropic.AsyncAnthropic",
+        return_value=fake_client,
+    ):
+        provider = AnthropicProvider(api_key="test")
+        msgs = [Message(role="user", content=[TextBlock(text="hi")])]
+        with pytest.raises(RetryableProviderError):
+            async for _ev in provider.stream(
+                messages=msgs,
+                system_prompt="",
+                tools=[],
+                config=ProviderCallConfig(model="claude-sonnet-4-5"),
+            ):
+                pass
+
+
+async def test_anthropic_500_maps_to_retryable() -> None:
+    """5xx → RetryableProviderError."""
+    from anthropic import APIStatusError
+
+    from meta_harney.errors import RetryableProviderError
+
+    fake_messages_client = MagicMock()
+
+    def _raise_500(**kwargs: Any) -> Any:
+        resp = MagicMock()
+        resp.status_code = 503
+        raise APIStatusError("upstream error", response=resp, body=None)
+
+    fake_messages_client.stream = MagicMock(side_effect=_raise_500)
+    fake_client = MagicMock()
+    fake_client.messages = fake_messages_client
+
+    with patch(
+        "meta_harney.providers.anthropic.AsyncAnthropic",
+        return_value=fake_client,
+    ):
+        provider = AnthropicProvider(api_key="test")
+        msgs = [Message(role="user", content=[TextBlock(text="hi")])]
+        with pytest.raises(RetryableProviderError):
+            async for _ev in provider.stream(
+                messages=msgs,
+                system_prompt="",
+                tools=[],
+                config=ProviderCallConfig(model="claude-sonnet-4-5"),
+            ):
+                pass
+
+
+async def test_anthropic_401_maps_to_non_retryable() -> None:
+    """401 → NonRetryableProviderError."""
+    from anthropic import APIStatusError
+
+    from meta_harney.errors import NonRetryableProviderError
+
+    fake_messages_client = MagicMock()
+
+    def _raise_401(**kwargs: Any) -> Any:
+        resp = MagicMock()
+        resp.status_code = 401
+        raise APIStatusError("auth failed", response=resp, body=None)
+
+    fake_messages_client.stream = MagicMock(side_effect=_raise_401)
+    fake_client = MagicMock()
+    fake_client.messages = fake_messages_client
+
+    with patch(
+        "meta_harney.providers.anthropic.AsyncAnthropic",
+        return_value=fake_client,
+    ):
+        provider = AnthropicProvider(api_key="test")
+        msgs = [Message(role="user", content=[TextBlock(text="hi")])]
+        with pytest.raises(NonRetryableProviderError):
+            async for _ev in provider.stream(
+                messages=msgs,
+                system_prompt="",
+                tools=[],
+                config=ProviderCallConfig(model="claude-sonnet-4-5"),
+            ):
+                pass
