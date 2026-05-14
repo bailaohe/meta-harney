@@ -336,6 +336,19 @@ async def run_turn(
                 )
 
             session.messages.append(Message(role="tool", content=tool_result_blocks))
+
+            # Tools may have independently persisted the session via
+            # `ctx.session_store.save(...)` — e.g. todo_write writes
+            # `session.attributes["todos"]`. That bumps the on-disk version
+            # without touching our in-memory copy, so our final save at
+            # end-of-turn would conflict. Reload from disk and pick up the
+            # tool's `attributes` + the new `version`, while keeping the
+            # engine's authoritative message history.
+            fresh = await session_store.load(session_id)
+            if fresh is not None and fresh.version > session.version:
+                session.attributes = fresh.attributes
+                session.version = fresh.version
+
             yield IterationCompleted(iteration=iteration)
             iteration += 1
 

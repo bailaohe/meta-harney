@@ -1104,3 +1104,84 @@ async def test_thinking_plus_tool_use_multi_turn_persistence_e2e() -> None:
     assert any(any(isinstance(b, ThinkingBlock) for b in m.content) for m in assistant_msgs), (
         "second turn should include ThinkingBlock in history"
     )
+
+
+class _SessionMutatingInput(BaseModel):
+    note: str = ""
+
+
+class _SessionMutatingTool(BaseTool):
+    """Tool that loads + mutates + saves session via ToolContext.
+
+    Mirrors oh-mini's todo_write pattern. This used to crash the engine
+    with SessionConflictError because the tool's save bumped the on-disk
+    version without notifying the engine's in-memory copy.
+    """
+
+    name: ClassVar[str] = "session_mutate"
+    description: ClassVar[str] = "Writes inv.args['note'] into session.attributes."
+    input_schema: ClassVar[type[BaseModel]] = _SessionMutatingInput
+
+    async def execute(self, inv: ToolInvocation, ctx: ToolContext) -> ToolResult:
+        s = await ctx.session_store.load(inv.session_id)
+        if s is None:
+            return ToolResult(success=False, error="no session")
+        s.attributes["note"] = str(inv.args.get("note", ""))
+        await ctx.session_store.save(s)
+        return ToolResult(success=True, output="stored")
+
+
+async def test_tool_persisting_session_does_not_conflict_with_final_save() -> None:
+    """Regression: tool that saves session must not trigger SessionConflictError
+    at the engine's end-of-turn save. Engine should re-sync attributes+version
+    from disk after each tool iteration."""
+    store = MemorySessionStore()
+    # Pre-save the session so we exercise version handling from a non-zero start
+    s = await _new_session(store)
+    # Bump the session to version=1 by saving once before the turn
+    await store.save(s)
+
+    provider = FakeLLMProvider(
+        rounds=[
+            FakeRound(
+                tool_calls=[
+                    ProviderToolCall(
+                        invocation_id="inv-1",
+                        name="session_mutate",
+                        args={"note": "hello"},
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            FakeRound(text="done", stop_reason="end_turn"),
+        ]
+    )
+
+    builder = MinimalPromptBuilder(session_store=store)
+
+    # Should NOT raise SessionConflictError
+    events: list[StreamEvent] = []
+    async for ev in run_turn(
+        session_id="s1",
+        user_message=Message(role="user", content=[TextBlock(text="run it")]),
+        provider=provider,
+        prompt_builder=builder,
+        permission_resolver=AllowAllPermissionResolver(),
+        tools={"session_mutate": _SessionMutatingTool()},
+        hooks=[],
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="fake-model"),
+    ):
+        events.append(ev)
+
+    assert isinstance(events[-1], TurnCompleted)
+
+    # Final session has the tool's attribute change AND all messages
+    loaded = await store.load("s1")
+    assert loaded is not None
+    assert loaded.attributes.get("note") == "hello"
+    # user + assistant(tool_call) + tool + assistant(final)
+    assert len(loaded.messages) == 4
+    roles = [m.role for m in loaded.messages]
+    assert roles == ["user", "assistant", "tool", "assistant"]
