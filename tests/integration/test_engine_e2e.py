@@ -45,6 +45,7 @@ from meta_harney.providers.base import (
     ToolSpec as _TS,
 )
 from meta_harney.providers.fake import FakeLLMProvider, FakeRound, ProviderToolCall
+from meta_harney.runtime import AgentRuntime
 
 
 async def _new_session(store: MemorySessionStore, session_id: str = "s1") -> Session:
@@ -694,3 +695,41 @@ async def test_non_retryable_propagates_immediately() -> None:
             pass
 
     assert provider.attempts == 1
+
+
+async def test_runtime_drives_full_turn_e2e() -> None:
+    """AgentRuntime composes services and drives a multi-message conversation."""
+    store = MemorySessionStore()
+    provider = FakeLLMProvider(rounds=[
+        FakeRound(
+            tool_calls=[ProviderToolCall(
+                invocation_id="i1", name="echo", args={"text": "world"},
+            )],
+            stop_reason="tool_use",
+        ),
+        FakeRound(text="Got it.", stop_reason="end_turn"),
+    ])
+
+    rt = AgentRuntime(
+        provider=provider,
+        prompt_builder=MinimalPromptBuilder(session_store=store),
+        permission_resolver=AllowAllPermissionResolver(),
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(model="x"),
+        tools={"echo": _EchoTool()},
+        hooks=[],
+    )
+
+    session = await rt.create_session(tenant_id="acme")
+    final = await rt.invoke(session.id, "echo world please")
+
+    assert final.role == "assistant"
+    assert isinstance(final.content[0], TextBlock)
+    assert "Got it" in final.content[0].text
+
+    # Session state: 4 messages (user, assistant w/ tool call, tool, assistant final)
+    loaded = await store.load(session.id)
+    assert loaded is not None
+    assert loaded.tenant_id == "acme"
+    assert len(loaded.messages) == 4
