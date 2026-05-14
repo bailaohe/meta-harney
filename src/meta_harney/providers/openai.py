@@ -243,6 +243,9 @@ class OpenAIProvider:
 
                 if choice.finish_reason is not None:
                     finish_reason = choice.finish_reason
+        # NOTE: RateLimitError is a subclass of APIStatusError in the openai SDK.
+        # It MUST be caught before APIStatusError or rate-limit errors would be
+        # misclassified as non-retryable 4xx.
         except RateLimitError as exc:
             raise RetryableProviderError(f"openai rate limit: {exc}") from exc
         except APIStatusError as exc:
