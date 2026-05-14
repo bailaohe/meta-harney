@@ -43,6 +43,36 @@ export interface InitializeResult {
   capabilities: Record<string, unknown>;
 }
 
+export interface SessionCreateParams {
+  sessionId?: string;
+  tenantId?: string;
+  userId?: string;
+}
+
+export interface SessionSummary {
+  id: string;
+  created_at: string;
+}
+
+export interface SessionListEntry {
+  id: string;
+  created_at: string;
+  message_count: number;
+  last_message_at: string | null;
+}
+
+export interface SessionLoadResult {
+  id: string;
+  created_at: string;
+  messages: unknown[];
+}
+
+export interface ToolSpec {
+  name: string;
+  description: string;
+  input_schema: unknown;
+}
+
 interface PendingResolver {
   resolve: (v: unknown) => void;
   reject: (e: Error) => void;
@@ -163,6 +193,48 @@ export class BridgeClient {
       // Wait for the loop to settle so the process can exit cleanly.
       await this.readLoopDone;
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Session methods (Phase 11 Task 6)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Create a new session via `session.create`. All parameters are optional:
+   *   - sessionId: pre-allocate a specific id; server generates one if absent.
+   *   - tenantId / userId: tenancy metadata persisted alongside the session.
+   *
+   * Note: only fields the caller explicitly provided are serialized — we omit
+   * `undefined` keys so the server sees a clean payload matching its
+   * Optional[str] schema rather than `null`.
+   */
+  async sessionCreate(params?: SessionCreateParams): Promise<SessionSummary> {
+    const payload: Record<string, string> = {};
+    if (params?.sessionId !== undefined) payload.session_id = params.sessionId;
+    if (params?.tenantId !== undefined) payload.tenant_id = params.tenantId;
+    if (params?.userId !== undefined) payload.user_id = params.userId;
+    return await this.sendRequest<SessionSummary>("session.create", payload);
+  }
+
+  /** Enumerate sessions via `session.list`. */
+  async sessionList(): Promise<SessionListEntry[]> {
+    return await this.sendRequest<SessionListEntry[]>("session.list");
+  }
+
+  /** Load a session (with its message history) via `session.load`. */
+  async sessionLoad(sessionId: string): Promise<SessionLoadResult> {
+    return await this.sendRequest<SessionLoadResult>("session.load", {
+      session_id: sessionId,
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Tools methods (Phase 11 Task 6)
+  // -------------------------------------------------------------------------
+
+  /** Enumerate runtime tools via `tools.list`. */
+  async toolsList(): Promise<ToolSpec[]> {
+    return await this.sendRequest<ToolSpec[]>("tools.list");
   }
 
   // -------------------------------------------------------------------------

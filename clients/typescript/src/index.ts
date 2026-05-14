@@ -32,6 +32,11 @@ export type {
   BridgeClientOptions,
   InitializeParams,
   InitializeResult,
+  SessionCreateParams,
+  SessionSummary,
+  SessionListEntry,
+  SessionLoadResult,
+  ToolSpec,
 } from "./client.js";
 
 export const VERSION = "0.1.0";

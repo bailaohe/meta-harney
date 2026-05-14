@@ -353,3 +353,150 @@ describe("BridgeClient lifecycle", () => {
     expect(e.code).toBe(-32601);
   });
 });
+
+describe("BridgeClient sessions + tools", () => {
+  it("sessionCreate sends session.create with empty payload by default", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    t.feed({
+      jsonrpc: "2.0",
+      id: 1,
+      result: { id: "abc", created_at: "2026-01-01T00:00:00" },
+    });
+    const s = await client.sessionCreate();
+    expect(s.id).toBe("abc");
+    expect(s.created_at).toBe("2026-01-01T00:00:00");
+    const sent = decode(t.sent[0]!);
+    expect(sent.method).toBe("session.create");
+    // No optional fields supplied — params is an empty object, not `null`.
+    expect(sent.params).toEqual({});
+    await client.exit();
+  });
+
+  it("sessionCreate forwards sessionId/tenantId/userId in snake_case", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    t.feed({
+      jsonrpc: "2.0",
+      id: 1,
+      result: { id: "sess-1", created_at: "2026-01-01T00:00:00" },
+    });
+    await client.sessionCreate({
+      sessionId: "sess-1",
+      tenantId: "acme",
+      userId: "u-42",
+    });
+    const sent = decode(t.sent[0]!);
+    expect(sent.method).toBe("session.create");
+    expect(sent.params).toEqual({
+      session_id: "sess-1",
+      tenant_id: "acme",
+      user_id: "u-42",
+    });
+    await client.exit();
+  });
+
+  it("sessionCreate omits undefined optional fields", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    t.feed({
+      jsonrpc: "2.0",
+      id: 1,
+      result: { id: "x", created_at: "2026-01-01T00:00:00" },
+    });
+    await client.sessionCreate({ tenantId: "acme" });
+    const sent = decode(t.sent[0]!);
+    expect(sent.params).toEqual({ tenant_id: "acme" });
+    await client.exit();
+  });
+
+  it("sessionList sends session.list and returns the array", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    const entries = [
+      {
+        id: "s1",
+        created_at: "2026-01-01T00:00:00",
+        message_count: 3,
+        last_message_at: "2026-01-01T00:01:00",
+      },
+      {
+        id: "s2",
+        created_at: "2026-01-02T00:00:00",
+        message_count: 0,
+        last_message_at: null,
+      },
+    ];
+    t.feed({ jsonrpc: "2.0", id: 1, result: entries });
+    const out = await client.sessionList();
+    expect(out).toEqual(entries);
+    const sent = decode(t.sent[0]!);
+    expect(sent.method).toBe("session.list");
+    // No params should be sent on the wire (sendRequest passes undefined).
+    expect(sent.params).toBeUndefined();
+    await client.exit();
+  });
+
+  it("sessionLoad sends session.load with session_id and returns messages", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    const result = {
+      id: "sess-1",
+      created_at: "2026-01-01T00:00:00",
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "hello" },
+      ],
+    };
+    t.feed({ jsonrpc: "2.0", id: 1, result });
+    const loaded = await client.sessionLoad("sess-1");
+    expect(loaded.id).toBe("sess-1");
+    expect(loaded.messages).toHaveLength(2);
+    const sent = decode(t.sent[0]!);
+    expect(sent.method).toBe("session.load");
+    expect(sent.params).toEqual({ session_id: "sess-1" });
+    await client.exit();
+  });
+
+  it("toolsList sends tools.list and returns the array", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    const tools = [
+      {
+        name: "bash",
+        description: "Run a shell command",
+        input_schema: { type: "object" },
+      },
+    ];
+    t.feed({ jsonrpc: "2.0", id: 1, result: tools });
+    const out = await client.toolsList();
+    expect(out).toEqual(tools);
+    const sent = decode(t.sent[0]!);
+    expect(sent.method).toBe("tools.list");
+    expect(sent.params).toBeUndefined();
+    await client.exit();
+  });
+
+  it("session methods propagate BridgeError on error responses", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    t.feed({
+      jsonrpc: "2.0",
+      id: 1,
+      error: { code: -32004, message: "session not found" },
+    });
+    await expect(client.sessionLoad("missing")).rejects.toMatchObject({
+      name: "BridgeError",
+      code: -32004,
+      message: "session not found",
+    });
+    await client.exit();
+  });
+});
