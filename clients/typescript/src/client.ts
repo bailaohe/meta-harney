@@ -74,6 +74,27 @@ export interface ToolSpec {
 }
 
 // ---------------------------------------------------------------------------
+// Telemetry types (Phase 11 Task 8)
+// ---------------------------------------------------------------------------
+
+/**
+ * Payload shape of a `telemetry/event` notification, as emitted by the
+ * bridge's `BridgeTraceSink`. `event_type` mirrors the underlying
+ * `TraceEvent.kind` (e.g. "turn_started", "tool_call_completed"); `payload`
+ * is the model-dumped TraceEvent (shape is event-kind-dependent and stays
+ * opaque at this layer so we don't lock the client to a specific schema).
+ */
+export interface TelemetryEvent {
+  event_type: string;
+  payload: unknown;
+}
+
+/** Result of `telemetry/subscribe` — server echoes the requested state. */
+export interface TelemetrySubscribeResult {
+  enabled: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // SendMessage types (Phase 11 Task 7)
 // ---------------------------------------------------------------------------
 
@@ -213,6 +234,14 @@ export class BridgeClient {
    * error, or cancel) lands.
    */
   private readonly inflight = new Map<number, SendMessageHandleImpl>();
+  /**
+   * Registered telemetry sinks. Populated by `onTelemetry()`; fired by the
+   * default `onNotification` hook on every inbound `telemetry/event`. Kept
+   * as a list (rather than a single handler) because multiple consumers may
+   * want to observe the stream — e.g. a status bar + a debug log + an
+   * external aggregator — without trampling on each other.
+   */
+  private readonly telemetryHandlers: Array<(ev: TelemetryEvent) => void> = [];
   private readLoopStarted = false;
   private readLoopDone: Promise<void> | null = null;
   private exited = false;
@@ -253,8 +282,26 @@ export class BridgeClient {
         if (typeof rid !== "number") return;
         const handle = this.inflight.get(rid);
         if (handle !== undefined) handle._emit(p.event);
+      } else if (method === "telemetry/event") {
+        // Validate the shape lightly so a malformed payload from a buggy
+        // server doesn't crash subscribers. We trust `event_type` to be a
+        // string (per the bridge's `BridgeTraceSink` contract) but keep
+        // `payload` opaque.
+        if (params === null || typeof params !== "object") return;
+        const p = params as { event_type?: unknown; payload?: unknown };
+        if (typeof p.event_type !== "string") return;
+        const ev: TelemetryEvent = {
+          event_type: p.event_type,
+          payload: p.payload,
+        };
+        for (const h of this.telemetryHandlers) {
+          try {
+            h(ev);
+          } catch {
+            // Handlers must not crash the read loop.
+          }
+        }
       }
-      // Other notifications (telemetry/event) are wired by later tasks.
     };
 
     this.onIncomingRequest = (req) => {
@@ -474,6 +521,40 @@ export class BridgeClient {
    */
   async _sendCancel(requestId: number): Promise<void> {
     await this.sendNotification("$/cancelRequest", { id: requestId });
+  }
+
+  // -------------------------------------------------------------------------
+  // Telemetry (Phase 11 Task 8)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Toggle bridge-side forwarding of trace events as `telemetry/event`
+   * notifications. The server echoes the resolved state back so the caller
+   * can drive UI affordances (e.g. a "telemetry on" status indicator) off
+   * of the authoritative response rather than guessing.
+   *
+   * Note: subscription is independent of `onTelemetry` — local handlers
+   * fire whenever the bridge sends an event regardless of who toggled it,
+   * but the bridge won't emit anything until at least one client calls
+   * `telemetrySubscribe(true)`.
+   */
+  async telemetrySubscribe(
+    enabled: boolean,
+  ): Promise<TelemetrySubscribeResult> {
+    return await this.sendRequest<TelemetrySubscribeResult>(
+      "telemetry/subscribe",
+      { enabled },
+    );
+  }
+
+  /**
+   * Register a sink for `telemetry/event` notifications. Multiple sinks
+   * are supported — each is invoked in registration order. Handlers must
+   * not throw; any thrown error is swallowed so a single buggy subscriber
+   * can't break the read loop or starve other subscribers.
+   */
+  onTelemetry(handler: (event: TelemetryEvent) => void): void {
+    this.telemetryHandlers.push(handler);
   }
 
   // -------------------------------------------------------------------------

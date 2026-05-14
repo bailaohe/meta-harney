@@ -44,6 +44,8 @@ export type {
   StreamEvent,
   SendMessageResult,
   SendMessageHandle,
+  TelemetryEvent,
+  TelemetrySubscribeResult,
 } from "./client.js";
 
 export const VERSION = "0.1.0";

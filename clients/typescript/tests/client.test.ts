@@ -739,3 +739,167 @@ describe("BridgeClient sendMessage handle", () => {
     await client.exit();
   });
 });
+
+describe("BridgeClient telemetry", () => {
+  const flush = async (n = 3): Promise<void> => {
+    for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r));
+  };
+
+  it("telemetrySubscribe(true) sends telemetry/subscribe and returns the echoed state", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    t.feed({ jsonrpc: "2.0", id: 1, result: { enabled: true } });
+    const out = await client.telemetrySubscribe(true);
+    expect(out).toEqual({ enabled: true });
+    const sent = decode(t.sent[0]!);
+    expect(sent.method).toBe("telemetry/subscribe");
+    expect(sent.params).toEqual({ enabled: true });
+    expect(sent.id).toBe(1);
+    await client.exit();
+  });
+
+  it("telemetrySubscribe(false) forwards disable to the bridge", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    t.feed({ jsonrpc: "2.0", id: 1, result: { enabled: false } });
+    const out = await client.telemetrySubscribe(false);
+    expect(out.enabled).toBe(false);
+    const sent = decode(t.sent[0]!);
+    expect(sent.params).toEqual({ enabled: false });
+    await client.exit();
+  });
+
+  it("onTelemetry handlers fire when telemetry/event arrives", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    const seen: Array<{ event_type: string; payload: unknown }> = [];
+    client.onTelemetry((ev) => seen.push(ev));
+    t.feed({
+      jsonrpc: "2.0",
+      method: "telemetry/event",
+      params: {
+        event_type: "turn_started",
+        payload: { session_id: "sess-1", turn_id: "t1" },
+      },
+    });
+    await flush();
+    expect(seen).toEqual([
+      {
+        event_type: "turn_started",
+        payload: { session_id: "sess-1", turn_id: "t1" },
+      },
+    ]);
+    await client.exit();
+  });
+
+  it("supports multiple telemetry subscribers and invokes each in order", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    const order: string[] = [];
+    client.onTelemetry(() => order.push("a"));
+    client.onTelemetry(() => order.push("b"));
+    client.onTelemetry(() => order.push("c"));
+    t.feed({
+      jsonrpc: "2.0",
+      method: "telemetry/event",
+      params: { event_type: "tool_call_completed", payload: {} },
+    });
+    await flush();
+    expect(order).toEqual(["a", "b", "c"]);
+    await client.exit();
+  });
+
+  it("does not invoke telemetry handlers for non-telemetry notifications", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    let count = 0;
+    client.onTelemetry(() => count++);
+    // A stream/event notification — must not leak into telemetry sinks.
+    t.feed({
+      jsonrpc: "2.0",
+      method: "stream/event",
+      params: { request_id: 999, event: { type: "x" } },
+    });
+    await flush();
+    expect(count).toBe(0);
+    await client.exit();
+  });
+
+  it("ignores malformed telemetry/event payloads without throwing", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    let count = 0;
+    client.onTelemetry(() => count++);
+    // Missing event_type — must be dropped silently.
+    t.feed({
+      jsonrpc: "2.0",
+      method: "telemetry/event",
+      params: { payload: {} },
+    });
+    // params null — also dropped.
+    t.feed({
+      jsonrpc: "2.0",
+      method: "telemetry/event",
+      params: null,
+    });
+    await flush();
+    expect(count).toBe(0);
+    // A valid event after the malformed ones still gets through.
+    t.feed({
+      jsonrpc: "2.0",
+      method: "telemetry/event",
+      params: { event_type: "x", payload: 1 },
+    });
+    await flush();
+    expect(count).toBe(1);
+    await client.exit();
+  });
+
+  it("a throwing telemetry handler does not break subsequent handlers or the read loop", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    let bSaw = 0;
+    client.onTelemetry(() => {
+      throw new Error("boom");
+    });
+    client.onTelemetry(() => {
+      bSaw++;
+    });
+    t.feed({
+      jsonrpc: "2.0",
+      method: "telemetry/event",
+      params: { event_type: "x", payload: null },
+    });
+    await flush();
+    expect(bSaw).toBe(1);
+    // The read loop is still alive — a subsequent request still resolves.
+    t.feed({ jsonrpc: "2.0", id: 1, result: { enabled: true } });
+    await expect(client.telemetrySubscribe(true)).resolves.toEqual({
+      enabled: true,
+    });
+    await client.exit();
+  });
+
+  it("propagates BridgeError when telemetry/subscribe fails server-side", async () => {
+    const t = new FakeTransport();
+    const client = makeClient(t);
+    await client.start();
+    t.feed({
+      jsonrpc: "2.0",
+      id: 1,
+      error: { code: -32602, message: "enabled (bool) required" },
+    });
+    await expect(client.telemetrySubscribe(true)).rejects.toMatchObject({
+      name: "BridgeError",
+      code: -32602,
+    });
+    await client.exit();
+  });
+});
