@@ -1,5 +1,4 @@
 """Engine main loop: run_turn() orchestrator."""
-
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Callable
@@ -20,6 +19,7 @@ from meta_harney.abstractions.tool import BaseTool, ToolContext, ToolInvocation,
 from meta_harney.abstractions.trace import TraceSink
 from meta_harney.engine.config import RuntimeConfig, tool_to_spec
 from meta_harney.engine.hook_dispatch import dispatch_hooks
+from meta_harney.engine.retry import retry_with_backoff
 from meta_harney.engine.stream_events import (
     IterationCompleted,
     StreamEvent,
@@ -33,9 +33,12 @@ from meta_harney.engine.tracing import emit_event, new_span_id
 from meta_harney.errors import SessionNotFoundError
 from meta_harney.providers.base import (
     LLMProvider,
+    ProviderCallConfig,
     ProviderStreamDone,
+    ProviderStreamEvent,
     ProviderTextDelta,
     ProviderToolCall,
+    ToolSpec,
 )
 
 TokenCounter = Callable[[list[Message]], int]
@@ -51,6 +54,30 @@ def _default_token_counter(messages: list[Message]) -> int:
             else:
                 total += 10  # rough fixed cost for non-text blocks
     return total
+
+
+async def _collect_provider_stream(
+    provider: LLMProvider,
+    messages: list[Message],
+    system_prompt: str,
+    tool_specs: list[ToolSpec],
+    call_config: ProviderCallConfig,
+) -> list[ProviderStreamEvent]:
+    """Run provider.stream() to completion, return event list.
+
+    This wraps a full stream consumption as a unit so retry_with_backoff
+    can re-run the whole call if a RetryableProviderError occurs.
+    Partial consumption cannot be safely resumed.
+    """
+    events: list[ProviderStreamEvent] = []
+    async for ev in provider.stream(
+        messages=messages,
+        system_prompt=system_prompt,
+        tools=tool_specs,
+        config=call_config,
+    ):
+        events.append(ev)
+    return events
 
 
 async def run_turn(
@@ -137,16 +164,31 @@ async def run_turn(
                 payload={"model": config.model, "iteration": iteration},
             )
 
+            # Snapshot inputs for retry — must not change between attempts
+            stream_messages = list(session.messages)
+            call_config = config.to_provider_call_config()
+
+            async def _call_provider(
+                _msgs: list[Message] = stream_messages,
+                _sp: str = system_prompt,
+                _specs: list[ToolSpec] = tool_specs,
+                _cfg: ProviderCallConfig = call_config,
+            ) -> list[ProviderStreamEvent]:
+                return await _collect_provider_stream(
+                    provider,
+                    _msgs,
+                    _sp,
+                    _specs,
+                    _cfg,
+                )
+
+            provider_events = await retry_with_backoff(_call_provider, config.retry)
+
             text_chunks: list[str] = []
             tool_calls: list[ProviderToolCall] = []
             stop_reason = "end_turn"
 
-            async for ev in provider.stream(
-                messages=list(session.messages),
-                system_prompt=system_prompt,
-                tools=tool_specs,
-                config=config.to_provider_call_config(),
-            ):
+            for ev in provider_events:
                 if isinstance(ev, ProviderTextDelta):
                     text_chunks.append(ev.text)
                     yield TextDelta(text=ev.text)
@@ -166,19 +208,16 @@ async def run_turn(
                             "output_tokens": ev.output_tokens,
                         },
                     )
-                    break
 
             assistant_blocks: list[ContentBlock] = []
             if text_chunks:
                 assistant_blocks.append(TextBlock(text="".join(text_chunks)))
             for tc in tool_calls:
-                assistant_blocks.append(
-                    ToolCallBlock(
-                        invocation_id=tc.invocation_id,
-                        name=tc.name,
-                        args=tc.args,
-                    )
-                )
+                assistant_blocks.append(ToolCallBlock(
+                    invocation_id=tc.invocation_id,
+                    name=tc.name,
+                    args=tc.args,
+                ))
             session.messages.append(Message(role="assistant", content=assistant_blocks))
 
             # Fire post_llm hook
@@ -349,13 +388,8 @@ async def run_turn(
         )
         try:
             await trace_sink.flush()
-        except Exception as flush_exc:
-            import sys
-
-            print(
-                f"[meta_harney] trace sink flush failed: {type(flush_exc).__name__}: {flush_exc}",
-                file=sys.stderr,
-            )
+        except Exception:
+            pass
 
         yield TurnCompleted(total_iterations=iteration)
 

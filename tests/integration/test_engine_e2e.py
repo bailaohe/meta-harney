@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from typing import ClassVar
 
@@ -21,6 +22,7 @@ from meta_harney.builtin.session.memory_store import MemorySessionStore
 from meta_harney.builtin.trace.null_sink import NullSink
 from meta_harney.engine.config import RuntimeConfig
 from meta_harney.engine.loop import run_turn
+from meta_harney.engine.retry import RetryConfig as _RetryConfig
 from meta_harney.engine.stream_events import (
     StreamEvent,
     TextDelta,
@@ -28,7 +30,20 @@ from meta_harney.engine.stream_events import (
     ToolCallStarted,
     TurnCompleted,
 )
-from meta_harney.errors import HookHaltError
+from meta_harney.errors import HookHaltError, NonRetryableProviderError, RetryableProviderError
+from meta_harney.providers.base import (
+    ProviderCallConfig as _PCC,
+)
+from meta_harney.providers.base import (
+    ProviderStreamDone,
+    ProviderTextDelta,
+)
+from meta_harney.providers.base import (
+    ProviderStreamEvent as _PSE,
+)
+from meta_harney.providers.base import (
+    ToolSpec as _TS,
+)
 from meta_harney.providers.fake import FakeLLMProvider, FakeRound, ProviderToolCall
 
 
@@ -440,7 +455,6 @@ async def test_compaction_triggered_e2e() -> None:
 
 async def test_cancellation_preserves_session() -> None:
     """If caller cancels mid-turn, session is saved with partial state."""
-    from collections.abc import AsyncGenerator
 
     from meta_harney.providers.base import (
         ProviderCallConfig,
@@ -555,3 +569,128 @@ async def test_trace_sink_failure_does_not_break_turn() -> None:
 
     # Sink was called multiple times (every emit call attempt was rejected)
     assert broken_sink.emit_calls >= 5
+
+
+class _FlakyProvider:
+    """Raises RetryableProviderError N times, then succeeds with one text round."""
+
+    def __init__(self, fail_count: int, succeed_text: str = "ok eventually") -> None:
+        self.fail_count = fail_count
+        self.attempts = 0
+        self.succeed_text = succeed_text
+
+    async def stream(
+        self,
+        messages: list[Message],
+        system_prompt: str,
+        tools: list[_TS],
+        config: _PCC,
+    ) -> AsyncGenerator[_PSE, None]:
+        self.attempts += 1
+        if self.attempts <= self.fail_count:
+            raise RetryableProviderError(f"transient #{self.attempts}")
+        yield ProviderTextDelta(text=self.succeed_text)
+        yield ProviderStreamDone(stop_reason="end_turn")
+
+
+async def test_retry_recovers_from_transient_failure() -> None:
+    """RetryableProviderError raised by provider.stream is retried per config.retry."""
+    store = MemorySessionStore()
+    await _new_session(store)
+
+    provider = _FlakyProvider(fail_count=2, succeed_text="success on attempt 3")
+
+    events: list[StreamEvent] = []
+    async for ev in run_turn(
+        session_id="s1",
+        user_message=Message(role="user", content=[TextBlock(text="hi")]),
+        provider=provider,  # type: ignore[arg-type]
+        prompt_builder=MinimalPromptBuilder(session_store=store),
+        permission_resolver=AllowAllPermissionResolver(),
+        tools={},
+        hooks=[],
+        session_store=store,
+        trace_sink=NullSink(),
+        config=RuntimeConfig(
+            model="x",
+            retry=_RetryConfig(max_attempts=3, initial_delay_s=0.001),
+        ),
+    ):
+        events.append(ev)
+
+    # Provider was called 3 times (2 failures + 1 success)
+    assert provider.attempts == 3
+
+    # Turn completed; assistant message captured success text
+    text_events = [e for e in events if isinstance(e, TextDelta)]
+    assert any("success on attempt 3" in e.text for e in text_events)
+
+
+async def test_retry_gives_up_after_max_attempts() -> None:
+    """After config.retry.max_attempts retries, RetryableProviderError propagates."""
+    store = MemorySessionStore()
+    await _new_session(store)
+
+    provider = _FlakyProvider(fail_count=99)  # always fails
+
+    with pytest.raises(RetryableProviderError):
+        async for _ev in run_turn(
+            session_id="s1",
+            user_message=Message(role="user", content=[TextBlock(text="hi")]),
+            provider=provider,  # type: ignore[arg-type]
+            prompt_builder=MinimalPromptBuilder(session_store=store),
+            permission_resolver=AllowAllPermissionResolver(),
+            tools={},
+            hooks=[],
+            session_store=store,
+            trace_sink=NullSink(),
+            config=RuntimeConfig(
+                model="x",
+                retry=_RetryConfig(max_attempts=2, initial_delay_s=0.001),
+            ),
+        ):
+            pass
+
+    assert provider.attempts == 2
+
+
+async def test_non_retryable_propagates_immediately() -> None:
+    """NonRetryableProviderError is NOT retried; raises on first attempt."""
+
+    class _AuthFailProvider:
+        attempts = 0
+
+        async def stream(
+            self,
+            messages: list[Message],
+            system_prompt: str,
+            tools: list[_TS],
+            config: _PCC,
+        ) -> AsyncGenerator[_PSE, None]:
+            self.attempts += 1
+            raise NonRetryableProviderError("auth failed")
+            yield  # type: ignore[unreachable]
+
+    store = MemorySessionStore()
+    await _new_session(store)
+    provider = _AuthFailProvider()
+
+    with pytest.raises(NonRetryableProviderError):
+        async for _ev in run_turn(
+            session_id="s1",
+            user_message=Message(role="user", content=[TextBlock(text="hi")]),
+            provider=provider,  # type: ignore[arg-type]
+            prompt_builder=MinimalPromptBuilder(session_store=store),
+            permission_resolver=AllowAllPermissionResolver(),
+            tools={},
+            hooks=[],
+            session_store=store,
+            trace_sink=NullSink(),
+            config=RuntimeConfig(
+                model="x",
+                retry=_RetryConfig(max_attempts=5, initial_delay_s=0.001),
+            ),
+        ):
+            pass
+
+    assert provider.attempts == 1
