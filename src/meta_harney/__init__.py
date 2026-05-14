@@ -1,19 +1,12 @@
 """meta_harney — domain-agnostic agent runtime SDK.
 
-Phase 6 status: stabilization release.
-- ToolResult.output serialization unified (helper in abstractions/_serialize)
-- ProviderThinkingDelta event variant — Anthropic extended-thinking streaming
-- Integration test coverage backfilled (tool-error-recovery, multi-turn-session)
-
-Public surface:
-- AgentRuntime facade (create_session, invoke, stream)
-- LLMProvider Protocol + ProviderStreamEvent variants
-- FakeLLMProvider + runtime_for_testing for SDK consumers' tests
-- AnthropicProvider (optional 'anthropic' extra; supports thinking_budget)
-- OpenAIProvider (optional 'openai' extra)
-- InProcessMultiAgentBackend
-- 9 core abstractions + builtin defaults (Phase 1)
-- StreamEvent types, RetryConfig, RuntimeConfig (Phase 2-3)
+Phase 7 status: extended-thinking full mode + GitHub Actions CI.
+- ThinkingBlock + RedactedThinkingBlock content blocks (persisted, round-tripped)
+- ProviderThinkingBlock + ProviderRedactedThinking stream events
+- AnthropicProvider buffers thinking_delta + signature_delta, emits at content_block_stop
+- Engine appends thinking blocks to assistant Message.content (entering session.messages)
+- OpenAIProvider silently skips thinking blocks (no concept)
+- GitHub repo + Actions CI matrix (Python 3.10/3.11/3.12 × ubuntu/macos)
 """
 
 from meta_harney.abstractions import (
