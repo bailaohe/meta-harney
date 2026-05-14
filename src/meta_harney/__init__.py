@@ -67,6 +67,12 @@ from meta_harney.providers.base import (
     ProviderToolCall,
     ToolSpec,
 )
+from meta_harney.providers.catalog import (
+    BUILT_IN_PROVIDERS,
+    ProviderSpec,
+    provider_from_spec,
+    register_provider,
+)
 from meta_harney.providers.openai import OpenAIProvider
 from meta_harney.runtime import AgentRuntime
 from meta_harney.testing import (
@@ -78,6 +84,8 @@ from meta_harney.testing import (
 __version__ = "0.0.7"
 
 __all__ = [
+    # provider catalog
+    "BUILT_IN_PROVIDERS",
     # runtime facade
     "AgentRuntime",
     # multi-agent
@@ -121,6 +129,7 @@ __all__ = [
     # provider call config
     "ProviderCallConfig",
     "ProviderRedactedThinking",
+    "ProviderSpec",
     "ProviderStreamDone",
     "ProviderStreamEvent",
     "ProviderTextDelta",
@@ -158,6 +167,8 @@ __all__ = [
     "TurnCompleted",
     "__version__",
     # engine entry point
+    "provider_from_spec",
+    "register_provider",
     "run_turn",
     "runtime_for_testing",
     "tool_to_spec",

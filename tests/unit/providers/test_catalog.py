@@ -1,4 +1,5 @@
 """Tests for the Provider Catalog (Phase 9a)."""
+
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
@@ -48,8 +49,15 @@ def test_provider_spec_with_invalid_kind_caught_by_mypy_not_runtime() -> None:
 
 
 _EXPECTED_NAMES = {
-    "anthropic", "openai", "moonshot", "deepseek", "gemini",
-    "minimax", "nvidia", "dashscope", "modelscope",
+    "anthropic",
+    "openai",
+    "moonshot",
+    "deepseek",
+    "gemini",
+    "minimax",
+    "nvidia",
+    "dashscope",
+    "modelscope",
 }
 
 
