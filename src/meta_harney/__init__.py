@@ -1,14 +1,15 @@
 """meta_harney — domain-agnostic agent runtime SDK.
 
-Phase 5 status: OpenAIProvider (second real LLM backend) added alongside
-AnthropicProvider. User-facing documentation shipped: README, architecture,
-abstractions, providers, and testing reference docs.
+Phase 6 status: stabilization release.
+- ToolResult.output serialization unified (helper in abstractions/_serialize)
+- ProviderThinkingDelta event variant — Anthropic extended-thinking streaming
+- Integration test coverage backfilled (tool-error-recovery, multi-turn-session)
 
 Public surface:
 - AgentRuntime facade (create_session, invoke, stream)
 - LLMProvider Protocol + ProviderStreamEvent variants
 - FakeLLMProvider + runtime_for_testing for SDK consumers' tests
-- AnthropicProvider (optional 'anthropic' extra)
+- AnthropicProvider (optional 'anthropic' extra; supports thinking_budget)
 - OpenAIProvider (optional 'openai' extra)
 - InProcessMultiAgentBackend
 - 9 core abstractions + builtin defaults (Phase 1)
@@ -65,6 +66,7 @@ from meta_harney.providers.base import (
     ProviderStreamDone,
     ProviderStreamEvent,
     ProviderTextDelta,
+    ProviderThinkingDelta,
     ProviderToolCall,
     ToolSpec,
 )
@@ -76,7 +78,7 @@ from meta_harney.testing import (
     runtime_for_testing,
 )
 
-__version__ = "0.0.5"
+__version__ = "0.0.6"
 
 __all__ = [
     # runtime facade
@@ -124,6 +126,7 @@ __all__ = [
     "ProviderStreamDone",
     "ProviderStreamEvent",
     "ProviderTextDelta",
+    "ProviderThinkingDelta",
     "ProviderToolCall",
     # retry
     "RetryConfig",
