@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import itertools
 import json
 import logging
 import traceback
@@ -63,6 +64,13 @@ class BridgeServer:
         # a specific in-flight request. Distinct from `_inflight` (used only for
         # graceful drain on EOF). Populated by `_dispatch_request`.
         self._inflight_by_request_id: dict[Any, asyncio.Task[Any]] = {}
+        # Server-initiated outbound requests (e.g., permission/request). Keyed
+        # by the request id we generate; negative-counting so we can't collide
+        # with the client's positive ids on the same connection.
+        self._pending: dict[Any, asyncio.Future[Any]] = {}
+        self._outbound_id_counter: Callable[[], int] = itertools.count(
+            start=-1, step=-1
+        ).__next__
         self._register_lifecycle_handlers()
         self._register_session_handlers()
         self._register_stream_handlers()
@@ -117,9 +125,11 @@ class BridgeServer:
                     else:
                         self._spawn(self._dispatch_notification(msg))
                 else:
-                    # JsonRpcResponse: bridge doesn't currently send outbound
-                    # requests in this skeleton — Task 7 will add a pending-table
-                    logger.debug("response received but no pending request table yet")
+                    # JsonRpcResponse: correlate against an outstanding outbound
+                    # request (e.g., permission/request). Unknown ids are dropped
+                    # — the peer may have responded to a stale request after we
+                    # cancelled it locally.
+                    self._handle_inbound_response(msg)
         finally:
             # Drain any in-flight handler tasks so their responses are written
             # before we close the writer.
@@ -228,6 +238,38 @@ class BridgeServer:
     async def _send_notification(self, method: str, params: Any) -> None:
         note = JsonRpcNotification(method=method, params=params)
         await self._send_raw(note.model_dump(exclude_none=True))
+
+    # ---- outbound (server-initiated) requests ----
+
+    async def send_request(self, method: str, params: dict[str, Any]) -> Any:
+        """Send a server-initiated JSON-RPC request to the client and await the result.
+
+        Used by ``BridgePermissionResolver`` and any future server-pushed RPCs
+        (e.g., interactive elicitation). Returns the response ``result`` on
+        success; raises ``RuntimeError`` if the client returns a JSON-RPC error.
+        """
+        rid = self._outbound_id_counter()
+        fut: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        self._pending[rid] = fut
+        req = JsonRpcRequest(id=rid, method=method, params=params)
+        await self._send_raw(req.model_dump(exclude_none=True))
+        try:
+            return await fut
+        finally:
+            self._pending.pop(rid, None)
+
+    def _handle_inbound_response(self, msg: JsonRpcResponse) -> None:
+        """Resolve the pending future for an inbound response, if any."""
+        fut = self._pending.pop(msg.id, None)
+        if fut is None or fut.done():
+            logger.debug("dropping response for unknown/completed id: %r", msg.id)
+            return
+        if msg.error is not None:
+            fut.set_exception(
+                RuntimeError(f"client error {msg.error.code}: {msg.error.message}")
+            )
+        else:
+            fut.set_result(msg.result)
 
     # ---- lifecycle handlers ----
 
