@@ -41,12 +41,17 @@ from meta_harney.providers.base import (
     ProviderToolCall,
     ToolSpec,
 )
+from meta_harney.providers.openai_quirks import (
+    deepseek_thinking_extras,
+    requires_reasoning_content_replay,
+)
 
 
 def _convert_messages_to_openai(
     messages: list[Message],
     *,
     system_prompt: str,
+    enable_reasoning_replay: bool = False,
 ) -> list[dict[str, Any]]:
     """Convert meta_harney messages to OpenAI Chat Completions format.
 
@@ -145,23 +150,26 @@ def _convert_messages_to_openai(
         else:
             entry["content"] = None  # tool_calls-only assistant
 
-        # `reasoning_content` replay for OpenAI-compat reasoners. Two paths:
-        #   1. We have a captured ThinkingBlock from a prior streaming turn
-        #      → replay its text. Required by DeepSeek/Kimi APIs to maintain
-        #      thinking-mode multi-turn correctness.
-        #   2. We have tool_calls but NO captured thinking text → force an
-        #      empty string. OpenHarness discovered Kimi/DeepSeek reject
-        #      tool-call follow-ups missing this field even when no reasoning
-        #      was emitted. Without this empty-string fallback the API
-        #      returns 400 `reasoning_content in the thinking mode must be
-        #      passed back`.
-        # For non-assistant rows or rows with neither thinking nor tool_calls,
-        # we omit the field entirely (non-reasoner models reject the unknown
-        # key on some providers).
+        # `reasoning_content` replay for OpenAI-compat reasoners. Three paths:
+        #   1. Captured ThinkingBlock from a prior streaming turn → replay
+        #      its text. Required by DeepSeek/Kimi APIs to maintain
+        #      thinking-mode multi-turn correctness. Sent regardless of
+        #      `enable_reasoning_replay` because if we have the text we
+        #      should always pass it back (no downside on non-reasoner
+        #      providers — they silently ignore unknown content).
+        #   2. tool_calls present, no thinking captured, AND the caller
+        #      flagged `enable_reasoning_replay` (i.e. this call targets
+        #      a vendor known to reject tool follow-ups missing the
+        #      field — see providers/openai_quirks.py) → force empty
+        #      string. Without it the upstream returns 400
+        #      `reasoning_content in the thinking mode must be passed
+        #      back`.
+        #   3. Anything else → omit the field (non-reasoner providers
+        #      will reject the unknown key on some implementations).
         if msg.role == "assistant":
             if thinking_texts:
                 entry["reasoning_content"] = "".join(thinking_texts)
-            elif tool_calls:
+            elif tool_calls and enable_reasoning_replay:
                 entry["reasoning_content"] = ""
 
         if tool_calls:
@@ -217,7 +225,19 @@ class OpenAIProvider:
         """Stream one OpenAI Chat Completions call."""
         client = AsyncOpenAI(api_key=self._api_key, base_url=self._base_url)
 
-        wire_messages = _convert_messages_to_openai(messages, system_prompt=system_prompt)
+        # Provider-specific quirks resolve once per call and feed BOTH the
+        # message serializer (multi-turn `reasoning_content` replay rules)
+        # AND the request-body shape (vendor extension fields). See
+        # providers/openai_quirks.py for the full vendor matrix and the
+        # rationale behind the double-gate (endpoint + model name).
+        thinking_extras = deepseek_thinking_extras(config.model, self._base_url)
+        enable_replay = requires_reasoning_content_replay(config.model, self._base_url)
+
+        wire_messages = _convert_messages_to_openai(
+            messages,
+            system_prompt=system_prompt,
+            enable_reasoning_replay=enable_replay,
+        )
         wire_tools = _convert_tools_to_openai(tools)
         max_tokens = config.max_tokens or self._default_max_tokens
 
@@ -232,6 +252,13 @@ class OpenAIProvider:
             kwargs["tools"] = wire_tools
         if config.temperature is not None:
             kwargs["temperature"] = config.temperature
+        if thinking_extras:
+            # Non-OpenAI-spec fields ride the SDK's `extra_body` channel
+            # rather than going in as top-level kwargs — the SDK rejects
+            # unknown direct kwargs but forwards `extra_body` verbatim as
+            # the JSON request body. This is the officially documented
+            # escape hatch for vendor extensions.
+            kwargs["extra_body"] = thinking_extras
 
         finish_reason: str | None = None
         input_tokens: int | None = None

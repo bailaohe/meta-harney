@@ -160,10 +160,32 @@ def test_convert_assistant_with_thinking_block_replays_reasoning_content() -> No
 
 
 def test_convert_assistant_with_tool_calls_forces_empty_reasoning_content() -> None:
-    """Assistant message with tool_calls but no ThinkingBlock must still
-    carry `reasoning_content: ""` — OpenHarness discovered Kimi/DeepSeek
-    reject tool-call follow-ups missing this field (returns 400
-    `reasoning_content in the thinking mode must be passed back`)."""
+    """When `enable_reasoning_replay=True`, an assistant message with
+    tool_calls but no ThinkingBlock must still carry `reasoning_content: ""`
+    — OpenHarness discovered Kimi/DeepSeek reject tool-call follow-ups
+    missing this field (returns 400 `reasoning_content in the thinking mode
+    must be passed back`)."""
+    msgs = [
+        Message(
+            role="assistant",
+            content=[
+                TextBlock(text="Searching..."),
+                ToolCallBlock(invocation_id="c1", name="grep", args={"q": "x"}),
+            ],
+        ),
+    ]
+    converted = _convert_messages_to_openai(
+        msgs, system_prompt="", enable_reasoning_replay=True
+    )
+    assistant_msg = converted[-1]
+    assert assistant_msg["reasoning_content"] == ""
+
+
+def test_convert_assistant_with_tool_calls_omits_reasoning_when_replay_off() -> None:
+    """When `enable_reasoning_replay=False` (i.e. non-DeepSeek-reasoner
+    provider), the forced-empty hack must NOT fire — OpenAI proper would
+    reject the unknown field, and most other OpenAI-compatible providers
+    don't care about it at all."""
     msgs = [
         Message(
             role="assistant",
@@ -175,7 +197,7 @@ def test_convert_assistant_with_tool_calls_forces_empty_reasoning_content() -> N
     ]
     converted = _convert_messages_to_openai(msgs, system_prompt="")
     assistant_msg = converted[-1]
-    assert assistant_msg["reasoning_content"] == ""
+    assert "reasoning_content" not in assistant_msg
 
 
 def test_convert_assistant_plain_text_omits_reasoning_content() -> None:
