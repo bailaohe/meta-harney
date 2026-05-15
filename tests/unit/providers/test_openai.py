@@ -22,6 +22,7 @@ from meta_harney.providers.base import (
     ProviderStreamDone,
     ProviderStreamEvent,
     ProviderTextDelta,
+    ProviderThinkingDelta,
     ProviderToolCall,
     ToolSpec,
 )
@@ -51,6 +52,7 @@ class _FakeOpenAIStream:
 def _make_chunk(
     *,
     text: str | None = None,
+    reasoning: str | None = None,
     finish_reason: str | None = None,
     usage: Any | None = None,
 ) -> MagicMock:
@@ -60,6 +62,7 @@ def _make_chunk(
     delta = MagicMock()
 
     delta.content = text
+    delta.reasoning_content = reasoning
     delta.tool_calls = None
     choice.delta = delta
     choice.finish_reason = finish_reason
@@ -239,6 +242,56 @@ def test_convert_tools_to_openai_basic() -> None:
 
 def test_convert_empty_tools() -> None:
     assert _convert_tools_to_openai([]) == []
+
+
+async def test_stream_emits_thinking_delta_from_reasoning_content() -> None:
+    """DeepSeek-style reasoners stream extended thinking via
+    `delta.reasoning_content`. Provider should surface it as
+    ProviderThinkingDelta, in source order with regular text deltas."""
+    chunks = [
+        _make_chunk(reasoning="Let me think... "),
+        _make_chunk(reasoning="the answer is 4."),
+        _make_chunk(text="The answer is "),
+        _make_chunk(text="4."),
+        _make_chunk(finish_reason="stop"),
+    ]
+
+    fake_completions = MagicMock()
+    fake_completions.create = AsyncMock(return_value=_FakeOpenAIStream(chunks))
+    fake_chat = MagicMock()
+    fake_chat.completions = fake_completions
+    fake_client = MagicMock()
+    fake_client.chat = fake_chat
+
+    with patch(
+        "meta_harney.providers.openai.AsyncOpenAI",
+        return_value=fake_client,
+    ):
+        provider = OpenAIProvider(api_key="test")
+        msgs = [Message(role="user", content=[TextBlock(text="2+2?")])]
+        collected: list[ProviderStreamEvent] = []
+        async for ev in provider.stream(
+            messages=msgs,
+            system_prompt="be helpful",
+            tools=[],
+            config=ProviderCallConfig(model="deepseek-reasoner"),
+        ):
+            collected.append(ev)
+
+    thinking = [e for e in collected if isinstance(e, ProviderThinkingDelta)]
+    text = [e for e in collected if isinstance(e, ProviderTextDelta)]
+    assert [e.text for e in thinking] == ["Let me think... ", "the answer is 4."]
+    assert [e.text for e in text] == ["The answer is ", "4."]
+    # The thinking deltas must arrive before the text deltas in the merged
+    # event stream so consumers can render them in the order they were
+    # produced by the model.
+    first_thinking_idx = next(
+        i for i, e in enumerate(collected) if isinstance(e, ProviderThinkingDelta)
+    )
+    first_text_idx = next(
+        i for i, e in enumerate(collected) if isinstance(e, ProviderTextDelta)
+    )
+    assert first_thinking_idx < first_text_idx
 
 
 async def test_stream_emits_text_delta_and_done() -> None:

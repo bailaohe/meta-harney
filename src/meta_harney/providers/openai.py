@@ -36,6 +36,7 @@ from meta_harney.providers.base import (
     ProviderStreamDone,
     ProviderStreamEvent,
     ProviderTextDelta,
+    ProviderThinkingDelta,
     ProviderToolCall,
     ToolSpec,
 )
@@ -222,6 +223,23 @@ class OpenAIProvider:
 
                 choice = chunk.choices[0]
                 delta = choice.delta
+
+                # DeepSeek reasoner / DashScope qwen-reasoning / Moonshot-k2
+                # and other OpenAI-compatible reasoning models stream the
+                # extended-thinking text in `delta.reasoning_content`, in
+                # parallel with the regular `delta.content`. Surface it as a
+                # ProviderThinkingDelta so the engine forwards it to the
+                # consumer as a streaming ThinkingDelta (not persisted to
+                # session.messages — same as the Anthropic thinking_delta
+                # passthrough path in engine/loop.py).
+                #
+                # `isinstance(..., str)` is required because MagicMock-based
+                # tests (and any future ducktyped stub) would return a
+                # truthy MagicMock from getattr when the attribute isn't set
+                # explicitly; only a real `str` value should fire the yield.
+                reasoning_delta = getattr(delta, "reasoning_content", None)
+                if isinstance(reasoning_delta, str) and reasoning_delta:
+                    yield ProviderThinkingDelta(text=reasoning_delta)
 
                 text_delta = getattr(delta, "content", None)
                 if text_delta:
