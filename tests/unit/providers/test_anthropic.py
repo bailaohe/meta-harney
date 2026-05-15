@@ -6,6 +6,7 @@ and don't make network calls.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncGenerator
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -923,6 +924,83 @@ def test_convert_thinking_block_to_anthropic_wire_format() -> None:
         "thinking": "reasoning",
         "signature": "sig1",
     }
+
+
+def test_convert_unsigned_thinking_block_is_dropped_on_anthropic_serialization(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Cross-provider session-resume fix.
+
+    OpenAI-compat reasoners (DeepSeek, Kimi k2, qwen-reasoning) produce
+    `ThinkingBlock(signature="")` — those vendors don't cryptographically
+    sign their reasoning. Those blocks persist in `session.messages` so
+    DeepSeek's own multi-turn `reasoning_content` replay works
+    (see openai_quirks.py / openai.py `_convert_messages_to_openai`).
+
+    When the user resumes the same session under
+    `--provider anthropic --model claude-*`, the Anthropic API rejects
+    unsigned thinking blocks with 400 `invalid_request_error`. To keep
+    cross-provider resume usable we DROP unsigned ThinkingBlocks during
+    Anthropic serialization (with a warning so the loss is auditable).
+
+    Trade-off: Claude doesn't see the prior DeepSeek reasoning. The
+    conversation continues. The user only pays this cost on the first
+    turn after a manual `/provider` switch.
+    """
+    from meta_harney.abstractions._types import Message, ThinkingBlock
+    from meta_harney.providers.anthropic import _convert_messages_to_anthropic
+
+    msgs = [
+        Message(
+            role="assistant",
+            content=[
+                ThinkingBlock(text="from-deepseek-reasoner", signature=""),
+                TextBlock(text="The sky is blue."),
+            ],
+        ),
+    ]
+    with caplog.at_level(logging.WARNING, logger="meta_harney.providers.anthropic"):
+        converted, _ = _convert_messages_to_anthropic(msgs)
+    content = converted[0]["content"]
+
+    # Unsigned thinking block is dropped; TextBlock survives unchanged.
+    assert content == [{"type": "text", "text": "The sky is blue."}]
+
+    # A warning is emitted so the drop is auditable in production logs.
+    drop_warnings = [
+        rec
+        for rec in caplog.records
+        if "Dropping unsigned ThinkingBlock" in rec.getMessage()
+    ]
+    assert len(drop_warnings) == 1
+    # The warning includes the char count so operators can gauge how
+    # much context was lost.
+    assert "22 chars" in drop_warnings[0].getMessage()
+
+
+def test_convert_signed_thinking_block_passes_through_unchanged() -> None:
+    """Anthropic's own signed thinking blocks must survive serialization
+    unchanged — only the unsigned (cross-vendor) variant gets dropped."""
+    from meta_harney.abstractions._types import Message, ThinkingBlock
+    from meta_harney.providers.anthropic import _convert_messages_to_anthropic
+
+    msgs = [
+        Message(
+            role="assistant",
+            content=[
+                ThinkingBlock(text="genuine thinking", signature="anthropic-sig-xyz"),
+                TextBlock(text="answer"),
+            ],
+        ),
+    ]
+    converted, _ = _convert_messages_to_anthropic(msgs)
+    content = converted[0]["content"]
+    assert content[0] == {
+        "type": "thinking",
+        "thinking": "genuine thinking",
+        "signature": "anthropic-sig-xyz",
+    }
+    assert content[1] == {"type": "text", "text": "answer"}
 
 
 def test_convert_redacted_thinking_block_to_anthropic_wire_format() -> None:

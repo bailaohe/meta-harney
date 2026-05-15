@@ -11,10 +11,13 @@ and error classification.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncGenerator
 from typing import Any
 
 from anthropic import APIConnectionError, APIStatusError, AsyncAnthropic
+
+logger = logging.getLogger("meta_harney.providers.anthropic")
 
 from meta_harney.abstractions._serialize import _serialize_tool_output
 from meta_harney.abstractions._types import (
@@ -64,7 +67,7 @@ def _convert_messages_to_anthropic(
     anthropic_messages: list[dict[str, Any]] = []
     system_parts: list[str] = []
 
-    def _convert_block(block: object) -> dict[str, Any]:
+    def _convert_block(block: object) -> dict[str, Any] | None:
         if isinstance(block, TextBlock):
             return {"type": "text", "text": block.text}
         if isinstance(block, ImageBlock):
@@ -99,6 +102,30 @@ def _convert_messages_to_anthropic(
                 result_block["is_error"] = True
             return result_block
         if isinstance(block, ThinkingBlock):
+            if not block.signature:
+                # Unsigned thinking blocks originate from OpenAI-compat
+                # reasoners (DeepSeek, Kimi k2, qwen-reasoning) — those
+                # vendors don't cryptographically sign their reasoning
+                # payloads. The Anthropic API rejects unsigned thinking
+                # blocks with 400 `invalid_request_error`, so dropping
+                # the block is the only way to keep a cross-provider
+                # session-resume conversation usable.
+                #
+                # Trade-off: Claude loses the prior DeepSeek/Kimi
+                # reasoning as context. The conversation continues; the
+                # reasoning span is just absent from history. The user
+                # only pays this cost on the first turn after a manual
+                # `/provider` switch — subsequent turns get freshly
+                # signed Anthropic thinking blocks (if reasoning is
+                # enabled on the Anthropic side).
+                logger.warning(
+                    "Dropping unsigned ThinkingBlock during Anthropic "
+                    "serialization (cross-provider session resume from "
+                    "an OpenAI-compat reasoner); %d chars of reasoning "
+                    "context will be invisible to Claude.",
+                    len(block.text),
+                )
+                return None
             return {
                 "type": "thinking",
                 "thinking": block.text,
@@ -117,7 +144,14 @@ def _convert_messages_to_anthropic(
 
         # Map role: tool → user (Anthropic convention)
         wire_role = "user" if msg.role == "tool" else msg.role
-        content_blocks = [_convert_block(b) for b in msg.content]
+        # `_convert_block` may return None to mean "skip this block" —
+        # currently only happens for unsigned ThinkingBlocks (see above).
+        # Filter Nones out before sending to the wire.
+        content_blocks = [
+            converted
+            for b in msg.content
+            if (converted := _convert_block(b)) is not None
+        ]
         anthropic_messages.append({"role": wire_role, "content": content_blocks})
 
     system_prompt = "\n\n".join(system_parts) if system_parts else None
