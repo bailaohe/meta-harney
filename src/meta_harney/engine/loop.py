@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, Callable
+import asyncio
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 
 from meta_harney.abstractions._types import (
     ContentBlock,
@@ -23,7 +24,8 @@ from meta_harney.abstractions.tool import BaseTool, ToolContext, ToolInvocation,
 from meta_harney.abstractions.trace import TraceSink
 from meta_harney.engine.config import RuntimeConfig, tool_to_spec
 from meta_harney.engine.hook_dispatch import dispatch_hooks
-from meta_harney.engine.retry import retry_with_backoff
+from meta_harney.engine.retry import RetryConfig, compute_backoff
+from meta_harney.errors import RetryableProviderError
 from meta_harney.engine.stream_events import (
     IterationCompleted,
     StreamEvent,
@@ -67,28 +69,66 @@ def _default_token_counter(messages: list[Message]) -> int:
     return total
 
 
-async def _collect_provider_stream(
+async def _open_provider_stream_with_retry(
     provider: LLMProvider,
     messages: list[Message],
     system_prompt: str,
     tool_specs: list[ToolSpec],
     call_config: ProviderCallConfig,
-) -> list[ProviderStreamEvent]:
-    """Run provider.stream() to completion, return event list.
+    retry_config: RetryConfig,
+) -> AsyncIterator[ProviderStreamEvent]:
+    """Open `provider.stream()` and yield events in real time.
 
-    This wraps a full stream consumption as a unit so retry_with_backoff
-    can re-run the whole call if a RetryableProviderError occurs.
-    Partial consumption cannot be safely resumed.
+    Retry semantics (changed in 0.2.7 to fix the long-standing buffering
+    bug):
+      * Errors raised BEFORE the first event arrives are retryable. This
+        is the typical connection-establishment failure surface
+        (rate-limit, 5xx, network drop) and the only phase where retry
+        is actually safe — the consumer hasn't observed anything yet.
+      * Errors raised AFTER the first event arrives propagate without
+        retry. A partially consumed stream cannot be resumed without
+        re-emitting chunks the consumer has already rendered, which
+        looks like garbage to the user (e.g. thinking text appearing
+        twice).
+
+    The previous implementation collected the entire stream into a list
+    before yielding — that made retry trivially safe but turned every
+    truly-streamed reasoning span (DeepSeek, Anthropic thinking, etc.)
+    into a single-frame burst at the engine's seam. Verified live: a
+    DeepSeek reasoning span that took ~3s on the wire arrived at the
+    bridge as 159 events within 81ms. Fix: surface the underlying
+    stream's natural pacing, accept the trade-off that mid-stream
+    failures are no longer retryable.
     """
-    events: list[ProviderStreamEvent] = []
-    async for ev in provider.stream(
-        messages=messages,
-        system_prompt=system_prompt,
-        tools=tool_specs,
-        config=call_config,
-    ):
-        events.append(ev)
-    return events
+    last_exc: RetryableProviderError | None = None
+    for attempt in range(1, retry_config.max_attempts + 1):
+        agen = provider.stream(
+            messages=messages,
+            system_prompt=system_prompt,
+            tools=tool_specs,
+            config=call_config,
+        ).__aiter__()
+        try:
+            first = await agen.__anext__()
+        except StopAsyncIteration:
+            # Empty stream — nothing to retry, nothing to yield.
+            return
+        except RetryableProviderError as exc:
+            last_exc = exc
+            if attempt < retry_config.max_attempts:
+                await asyncio.sleep(compute_backoff(retry_config, attempt=attempt))
+                continue
+            raise
+        # First event in hand — switch to real-time forwarding. Any error
+        # past this point propagates as-is; retry would duplicate already-
+        # rendered output.
+        yield first
+        async for ev in agen:
+            yield ev
+        return
+    # All attempts exhausted on first-event failures.
+    assert last_exc is not None
+    raise last_exc
 
 
 async def run_turn(
@@ -176,32 +216,28 @@ async def run_turn(
                 payload={"model": config.model, "iteration": iteration},
             )
 
-            # Snapshot inputs for retry — must not change between attempts
+            # Snapshot inputs — must not change while the stream is being
+            # consumed (mirrors the old retry-snapshot guarantee).
             stream_messages = list(session.messages)
             call_config = config.to_provider_call_config()
-
-            async def _call_provider(
-                _msgs: list[Message] = stream_messages,
-                _sp: str = system_prompt,
-                _specs: list[ToolSpec] = tool_specs,
-                _cfg: ProviderCallConfig = call_config,
-            ) -> list[ProviderStreamEvent]:
-                return await _collect_provider_stream(
-                    provider,
-                    _msgs,
-                    _sp,
-                    _specs,
-                    _cfg,
-                )
-
-            provider_events = await retry_with_backoff(_call_provider, config.retry)
 
             text_chunks: list[str] = []
             tool_calls: list[ProviderToolCall] = []
             thinking_blocks_buf: list[ThinkingBlock | RedactedThinkingBlock] = []
             stop_reason = "end_turn"
 
-            for ev in provider_events:
+            # Real-time stream: events fan out to the consumer (bridge,
+            # TUI, etc.) as the provider produces them. Retry is handled
+            # inside `_open_provider_stream_with_retry` and only covers
+            # the pre-first-event phase.
+            async for ev in _open_provider_stream_with_retry(
+                provider,
+                stream_messages,
+                system_prompt,
+                tool_specs,
+                call_config,
+                config.retry,
+            ):
                 if isinstance(ev, ProviderTextDelta):
                     text_chunks.append(ev.text)
                     yield TextDelta(text=ev.text)

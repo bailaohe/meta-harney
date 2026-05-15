@@ -94,7 +94,7 @@ from meta_harney.testing import (
     runtime_for_testing,
 )
 
-__version__ = "0.2.6"
+__version__ = "0.2.7"
 
 __all__ = [
     # provider catalog
