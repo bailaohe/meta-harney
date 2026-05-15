@@ -22,6 +22,7 @@ from meta_harney.providers.base import (
     ProviderStreamDone,
     ProviderStreamEvent,
     ProviderTextDelta,
+    ProviderThinkingBlock,
     ProviderThinkingDelta,
     ProviderToolCall,
     ToolSpec,
@@ -136,6 +137,60 @@ def test_convert_assistant_with_tool_call() -> None:
             "function": {"name": "search", "arguments": '{"q": "x"}'},
         }
     ]
+
+
+def test_convert_assistant_with_thinking_block_replays_reasoning_content() -> None:
+    """ThinkingBlock on an assistant message must be replayed as
+    `reasoning_content` so DeepSeek/Kimi reasoners can resume thinking-mode
+    multi-turn conversations without 400-erroring."""
+    msgs = [
+        Message(
+            role="assistant",
+            content=[
+                ThinkingBlock(text="Let me work through this...", signature=""),
+                TextBlock(text="The answer is 4."),
+            ],
+        ),
+    ]
+    converted = _convert_messages_to_openai(msgs, system_prompt="")
+    assistant_msg = converted[-1]
+    assert assistant_msg["role"] == "assistant"
+    assert assistant_msg["content"] == "The answer is 4."
+    assert assistant_msg["reasoning_content"] == "Let me work through this..."
+
+
+def test_convert_assistant_with_tool_calls_forces_empty_reasoning_content() -> None:
+    """Assistant message with tool_calls but no ThinkingBlock must still
+    carry `reasoning_content: ""` — OpenHarness discovered Kimi/DeepSeek
+    reject tool-call follow-ups missing this field (returns 400
+    `reasoning_content in the thinking mode must be passed back`)."""
+    msgs = [
+        Message(
+            role="assistant",
+            content=[
+                TextBlock(text="Searching..."),
+                ToolCallBlock(invocation_id="c1", name="grep", args={"q": "x"}),
+            ],
+        ),
+    ]
+    converted = _convert_messages_to_openai(msgs, system_prompt="")
+    assistant_msg = converted[-1]
+    assert assistant_msg["reasoning_content"] == ""
+
+
+def test_convert_assistant_plain_text_omits_reasoning_content() -> None:
+    """Plain text-only assistant (no thinking, no tool_calls) must NOT carry
+    `reasoning_content` — non-reasoner OpenAI models will reject unknown
+    keys on some providers."""
+    msgs = [
+        Message(
+            role="assistant",
+            content=[TextBlock(text="hello")],
+        ),
+    ]
+    converted = _convert_messages_to_openai(msgs, system_prompt="")
+    assistant_msg = converted[-1]
+    assert "reasoning_content" not in assistant_msg
 
 
 def test_convert_assistant_tool_call_only_no_text() -> None:
@@ -292,6 +347,88 @@ async def test_stream_emits_thinking_delta_from_reasoning_content() -> None:
         i for i, e in enumerate(collected) if isinstance(e, ProviderTextDelta)
     )
     assert first_thinking_idx < first_text_idx
+
+
+async def test_stream_emits_thinking_block_at_end_when_reasoning_present() -> None:
+    """When reasoning_content chunks accumulated, the provider must emit a
+    single ProviderThinkingBlock at end-of-stream so engine/loop can persist
+    it as a ThinkingBlock on the assistant message. This is what makes
+    DeepSeek/Kimi multi-turn `reasoning_content` replay work."""
+    chunks = [
+        _make_chunk(reasoning="Let me "),
+        _make_chunk(reasoning="think..."),
+        _make_chunk(text="Hello"),
+        _make_chunk(finish_reason="stop"),
+    ]
+
+    fake_completions = MagicMock()
+    fake_completions.create = AsyncMock(return_value=_FakeOpenAIStream(chunks))
+    fake_chat = MagicMock()
+    fake_chat.completions = fake_completions
+    fake_client = MagicMock()
+    fake_client.chat = fake_chat
+
+    with patch(
+        "meta_harney.providers.openai.AsyncOpenAI",
+        return_value=fake_client,
+    ):
+        provider = OpenAIProvider(api_key="test")
+        msgs = [Message(role="user", content=[TextBlock(text="hi")])]
+        collected: list[ProviderStreamEvent] = []
+        async for ev in provider.stream(
+            messages=msgs,
+            system_prompt="",
+            tools=[],
+            config=ProviderCallConfig(model="deepseek-reasoner"),
+        ):
+            collected.append(ev)
+
+    blocks = [e for e in collected if isinstance(e, ProviderThinkingBlock)]
+    assert len(blocks) == 1
+    assert blocks[0].text == "Let me think..."
+    assert blocks[0].signature == ""
+    # Must come before ProviderStreamDone (after deltas, before done event).
+    block_idx = next(
+        i for i, e in enumerate(collected) if isinstance(e, ProviderThinkingBlock)
+    )
+    done_idx = next(
+        i for i, e in enumerate(collected) if isinstance(e, ProviderStreamDone)
+    )
+    assert block_idx < done_idx
+
+
+async def test_stream_omits_thinking_block_when_no_reasoning() -> None:
+    """No reasoning_content chunks → no ProviderThinkingBlock emitted. Don't
+    pollute non-reasoner assistant messages with an empty thinking block."""
+    chunks = [
+        _make_chunk(text="just a text reply"),
+        _make_chunk(finish_reason="stop"),
+    ]
+
+    fake_completions = MagicMock()
+    fake_completions.create = AsyncMock(return_value=_FakeOpenAIStream(chunks))
+    fake_chat = MagicMock()
+    fake_chat.completions = fake_completions
+    fake_client = MagicMock()
+    fake_client.chat = fake_chat
+
+    with patch(
+        "meta_harney.providers.openai.AsyncOpenAI",
+        return_value=fake_client,
+    ):
+        provider = OpenAIProvider(api_key="test")
+        msgs = [Message(role="user", content=[TextBlock(text="hi")])]
+        collected: list[ProviderStreamEvent] = []
+        async for ev in provider.stream(
+            messages=msgs,
+            system_prompt="",
+            tools=[],
+            config=ProviderCallConfig(model="gpt-4"),
+        ):
+            collected.append(ev)
+
+    blocks = [e for e in collected if isinstance(e, ProviderThinkingBlock)]
+    assert blocks == []
 
 
 async def test_stream_emits_text_delta_and_done() -> None:

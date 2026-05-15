@@ -36,6 +36,7 @@ from meta_harney.providers.base import (
     ProviderStreamDone,
     ProviderStreamEvent,
     ProviderTextDelta,
+    ProviderThinkingBlock,
     ProviderThinkingDelta,
     ProviderToolCall,
     ToolSpec,
@@ -92,6 +93,7 @@ def _convert_messages_to_openai(
         text_parts: list[str] = []
         content_parts: list[dict[str, Any]] = []  # for vision-style multi-part
         tool_calls: list[dict[str, Any]] = []
+        thinking_texts: list[str] = []  # for OpenAI-compat reasoner replay
         has_non_text = False
 
         for block in msg.content:
@@ -121,8 +123,16 @@ def _convert_messages_to_openai(
                         },
                     }
                 )
-            elif isinstance(block, (ThinkingBlock, RedactedThinkingBlock)):
-                # OpenAI Chat Completions has no thinking concept; skip silently.
+            elif isinstance(block, ThinkingBlock):
+                # OpenAI-compat reasoning models (DeepSeek reasoner, Kimi k2,
+                # qwen-reasoning, etc.) require the previous turn's reasoning
+                # text to be replayed in `reasoning_content` for multi-turn
+                # follow-ups (e.g. agent-loop tool follow-ups). signature is
+                # empty for these providers — we only persist the text.
+                thinking_texts.append(block.text)
+            elif isinstance(block, RedactedThinkingBlock):
+                # Anthropic-only concept (encrypted/redacted thinking blob).
+                # No OpenAI-compatible representation; safe to drop.
                 continue
             # ToolResultBlock in user/assistant message is unexpected — skip
 
@@ -134,6 +144,25 @@ def _convert_messages_to_openai(
             entry["content"] = "".join(text_parts)
         else:
             entry["content"] = None  # tool_calls-only assistant
+
+        # `reasoning_content` replay for OpenAI-compat reasoners. Two paths:
+        #   1. We have a captured ThinkingBlock from a prior streaming turn
+        #      → replay its text. Required by DeepSeek/Kimi APIs to maintain
+        #      thinking-mode multi-turn correctness.
+        #   2. We have tool_calls but NO captured thinking text → force an
+        #      empty string. OpenHarness discovered Kimi/DeepSeek reject
+        #      tool-call follow-ups missing this field even when no reasoning
+        #      was emitted. Without this empty-string fallback the API
+        #      returns 400 `reasoning_content in the thinking mode must be
+        #      passed back`.
+        # For non-assistant rows or rows with neither thinking nor tool_calls,
+        # we omit the field entirely (non-reasoner models reject the unknown
+        # key on some providers).
+        if msg.role == "assistant":
+            if thinking_texts:
+                entry["reasoning_content"] = "".join(thinking_texts)
+            elif tool_calls:
+                entry["reasoning_content"] = ""
 
         if tool_calls:
             entry["tool_calls"] = tool_calls
@@ -211,6 +240,13 @@ class OpenAIProvider:
         # tool_call_buffer[index] = {"id": str, "name": str, "args_chunks": [str, ...]}
         tool_call_buffer: dict[int, dict[str, Any]] = {}
 
+        # Reasoning chunks for OpenAI-compat reasoners. Accumulated alongside
+        # the streamed ProviderThinkingDelta yields so we can also emit a
+        # single ProviderThinkingBlock at end-of-stream (engine/loop.py
+        # persists it as a ThinkingBlock on the assistant message — required
+        # for DeepSeek/Kimi multi-turn `reasoning_content` replay).
+        reasoning_chunks: list[str] = []
+
         try:
             stream_ = await client.chat.completions.create(**kwargs)
             async for chunk in stream_:
@@ -239,6 +275,7 @@ class OpenAIProvider:
                 # explicitly; only a real `str` value should fire the yield.
                 reasoning_delta = getattr(delta, "reasoning_content", None)
                 if isinstance(reasoning_delta, str) and reasoning_delta:
+                    reasoning_chunks.append(reasoning_delta)
                     yield ProviderThinkingDelta(text=reasoning_delta)
 
                 text_delta = getattr(delta, "content", None)
@@ -280,6 +317,19 @@ class OpenAIProvider:
             raise NonRetryableProviderError(f"openai API error (status {status}): {exc}") from exc
         except APIConnectionError as exc:
             raise RetryableProviderError(f"openai connection error: {exc}") from exc
+
+        # Emit a single ProviderThinkingBlock for the whole reasoning span so
+        # engine/loop.py can persist it as a ThinkingBlock on the assistant
+        # message. This is what makes multi-turn `reasoning_content` replay
+        # work (see _convert_messages_to_openai). signature is empty for
+        # OpenAI-compat reasoners — they don't sign the payload.
+        # Emitted BEFORE tool calls so the engine appends ThinkingBlock first
+        # in assistant.content, matching the Anthropic provider's ordering.
+        if reasoning_chunks:
+            yield ProviderThinkingBlock(
+                text="".join(reasoning_chunks),
+                signature="",
+            )
 
         # Emit ProviderToolCall for each accumulated tool call (sorted by index)
         for idx in sorted(tool_call_buffer):
